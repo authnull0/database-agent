@@ -52,6 +52,10 @@ func loadConfig(path string) (pkg.DBConfig, error) {
 
 	var config pkg.DBConfig
 	err = viper.Unmarshal(&config)
+	log.Printf("MAIN FUNCTION")
+	log.Printf("Org ID: %s", config.OrgID)
+	log.Printf("Tenant ID: %s", config.TenantID)
+
 	return config, err
 }
 func startAgent() {
@@ -74,7 +78,7 @@ func startAgent() {
 	defer db.Close()
 
 	// Fetch database details and their privileges
-	err = pkg.FetchDatabaseDetails(db, config.DBType)
+	err = pkg.FetchDatabaseDetails(db, config)
 	if err != nil {
 		log.Fatalf("Failed to fetch database details: %v", err)
 	}
