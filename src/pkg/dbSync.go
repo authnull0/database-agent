@@ -69,7 +69,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 
 	// Sync database information with the API
 	payload := map[string]interface{}{
-		"OrgID":        orgID,
+		"orgId":        orgID,
 		"tenantId":     tenantID,
 		"databaseType": config.DBType,
 		"databaseName": dbName,
