@@ -41,17 +41,22 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 	case "mysql":
 		var uptime int
 		if err := row.Scan(&status, &uptime); err != nil {
-			log.Printf("Database: %s STATUS: %s", dbName, "INACTIVE")
-			return err
+			log.Printf("Database: %s STATUS: %s", dbName, "Inactive")
+			status = "Inactive"
+		} else {
+			status = "Active"
+			log.Printf("Database: %s is Active", dbName)
 		}
 		log.Printf("Database: %s Active: %d seconds", dbName, uptime)
 
 	case "Postgres":
 		var isInRecovery bool
 		if err := row.Scan(&isInRecovery); err != nil {
-			return err
+			status = "Inactive"
+		} else {
+			status = map[bool]string{true: "In Recovery", false: "Active"}[isInRecovery]
+
 		}
-		status = map[bool]string{true: "In Recovery", false: "Active"}[isInRecovery]
 		log.Printf("Database Status: %s", status)
 
 	case "MSSQL":
@@ -73,7 +78,10 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 		"tenantId":     tenantID,
 		"databaseType": config.DBType,
 		"databaseName": dbName,
+		"host":         config.DBHost,
+		"port":         config.DBPort,
 		"status":       status,
+		"uuid":         config.API_KEY,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -82,11 +90,10 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 
 	}
 
-	apiURL := config.API + "/api/v1/dbSync"
+	apiURL := config.API + "/api/v1/databaseService/dbSync"
 	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
-	log.Println("Payload Sent:")
+	log.Println("Payload Sent: %s", string(payloadBytes))
 
-	log.Println(string(payloadBytes))
 	if err != nil {
 		log.Printf("Error while creating request: %v", err)
 

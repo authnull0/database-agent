@@ -102,12 +102,12 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		log.Println("FetchDatabaseStatus Ended")
 
 		// Fetch tables and users for each database
-		err = FetchDatabaseUsers(db, dbName, config)
+		// err = FetchDatabaseUsers(db, dbName, config)
 
-		if err != nil {
-			log.Printf("Failed to fetch table names  and user names for database %s: %v", dbName, err)
-		}
-		log.Println("FetchDatabaseUsers Ended")
+		// if err != nil {
+		// 	log.Printf("Failed to fetch table names  and user names for database %s: %v", dbName, err)
+		// }
+		// log.Println("FetchDatabaseUsers Ended")
 
 		// Fetch tables and privileges for each database
 		err = FetchTablePrivileges(db, dbName, config)

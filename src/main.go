@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	_ "github.com/denisenkom/go-mssqldb"
 	_ "github.com/go-sql-driver/mysql"
@@ -77,10 +78,15 @@ func startAgent() {
 	}
 	defer db.Close()
 
-	// Fetch database details and their privileges
-	err = pkg.FetchDatabaseDetails(db, config)
-	if err != nil {
-		log.Fatalf("Failed to fetch database details: %v", err)
+	//Synchronization loop every one minute
+	for {
+		log.Default().Println("Restarting the DB Synchronization...")
+		// Fetch database details and their privileges
+		err = pkg.FetchDatabaseDetails(db, config)
+		if err != nil {
+			log.Fatalf("Failed to fetch database details: %v", err)
+		}
+		time.Sleep(1 * time.Minute)
 	}
 }
 
