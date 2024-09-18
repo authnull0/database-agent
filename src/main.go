@@ -80,7 +80,7 @@ func startAgent() {
 
 	//Synchronization loop every one minute
 	for {
-		log.Default().Println("Restarting the DB Synchronization...")
+		log.Default().Println("DB Synchronization Started...")
 		// Fetch database details and their privileges
 		err = pkg.FetchDatabaseDetails(db, config)
 		if err != nil {
