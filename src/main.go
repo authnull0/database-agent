@@ -82,7 +82,7 @@ func startAgent() {
 	for {
 		log.Default().Println("Restarting the DB Synchronization...")
 		// Fetch database details and their privileges
-		err = pkg.FetchDatabaseDetails(db, config)
+		err = pkg.FetchDb(db, config)
 		if err != nil {
 			log.Fatalf("Failed to fetch database details: %v", err)
 		}

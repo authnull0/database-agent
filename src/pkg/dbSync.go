@@ -1,119 +1,186 @@
 package pkg
 
 import (
-	"bytes"
+	//"bytes"
 	"database/sql"
-	"encoding/json"
+	//"encoding/json"
 	"fmt"
-	"io/ioutil"
+	//"io/ioutil"
 	"log"
-	"net/http"
-	"strconv"
+	//"net/http"
+
+	"strings"
 )
 
-// FetchDatabaseStatus fetches the status of a database
-func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
-	var query string
+var systemDatabases = map[string][]string{
+	"mysql":    {"mysql", "information_schema", "performance_schema", "sys"},
+	"Postgres": {"postgres", "template0", "template1"},
+	"MSSQL":    {"master", "tempdb", "model", "msdb"},
+	"Oracle":   {"SYSTEM", "SYSAUX"},
+}
 
-	orgID, _ := strconv.Atoi(config.OrgID)
-	log.Printf("Org Id: %d", orgID)
-	tenantID, _ := strconv.Atoi(config.TenantID)
-	log.Printf("Tenant Id: %d", tenantID)
+func FetchDb(db *sql.DB, config DBConfig) error {
+	var query string
+	var excludeDBs string
+
+	// orgID, _ := strconv.Atoi(config.OrgID)
+	// tenantID, _ := strconv.Atoi(config.TenantID)
+
+	// Get the system databases for the current DB type and join them into a single string for exclusion
+	if sysDBs, ok := systemDatabases[config.DBType]; ok {
+		excludeDBs = "'" + strings.Join(sysDBs, "','") + "'" // Format as a string "'db1','db2','db3'"
+	}
 
 	switch config.DBType {
 	case "mysql":
-		query = "SHOW STATUS LIKE 'Uptime'"
+		query = `
+			SELECT 
+    table_schema AS database_name,
+    CASE 
+        WHEN @@read_only = 1 THEN 'In Recovery'
+        ELSE 'Active'
+    END AS database_status,
+    current_user() AS current_user,
+    (SELECT 
+        CASE 
+            WHEN super_priv = 'Y' THEN 'Admin'
+            ELSE 'User'
+        END 
+     FROM mysql.user 
+     WHERE user = SUBSTRING_INDEX(current_user(), '@', 1)
+     LIMIT 1) AS role,
+    table_name,
+    privilege_type
+FROM 
+    information_schema.tables
+JOIN 
+    information_schema.schema_privileges 
+ON 
+    tables.table_schema = schema_privileges.table_schema
+WHERE 
+    table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
+ORDER BY 
+    table_schema, table_name;
+	`
 	case "Postgres":
-		query = "SELECT pg_is_in_recovery() AS is_in_recovery"
+		query = fmt.Sprintf(`
+			SELECT 
+			    datname AS database_name, 
+			    CASE WHEN pg_is_in_recovery() THEN 'In Recovery' ELSE 'Active' END AS status,
+			    usename AS current_user,
+			    CASE 
+			        WHEN pg_roles.rolsuper = TRUE THEN 'Admin' 
+			        ELSE 'User' 
+			    END AS role,
+			    has_table_privilege(usename, tablename, 'SELECT') AS has_select_privilege,
+			    has_table_privilege(usename, tablename, 'INSERT') AS has_insert_privilege
+			FROM pg_database
+			JOIN pg_user ON usename = CURRENT_USER
+			JOIN pg_roles ON pg_roles.rolname = usename
+			WHERE datname NOT IN (%s);
+		`, excludeDBs)
 	case "MSSQL":
-		query = "SELECT state_desc FROM sys.databases WHERE name = DB_NAME()"
+		query = fmt.Sprintf(`
+			SELECT 
+			    db.name AS database_name,
+			    db.state_desc AS status,
+			    sp.name AS username,
+			    CASE 
+			        WHEN dp.name = 'db_owner' THEN 'Admin' 
+			        ELSE 'User' 
+			    END AS role,
+			    perm.permission_name AS privilege
+			FROM sys.databases db
+			JOIN sys.database_permissions perm ON perm.major_id = db.database_id
+			JOIN sys.database_principals sp ON sp.principal_id = perm.grantee_principal_id
+			JOIN sys.database_role_members rm ON rm.member_principal_id = sp.principal_id
+			JOIN sys.database_principals dp ON dp.principal_id = rm.role_principal_id
+			WHERE db.name NOT IN (%s);
+		`, excludeDBs)
 	case "Oracle":
-		query = "SELECT open_mode FROM v$database"
+		query = fmt.Sprintf(`
+			SELECT 
+			    d.name AS database_name,
+			    CASE WHEN d.open_mode = 'READ WRITE' THEN 'Active' ELSE 'Inactive' END AS status,
+			    u.username,
+			    (SELECT 
+			        CASE 
+			            WHEN role = 'DBA' THEN 'Admin' 
+			            ELSE 'User' 
+			        END 
+			     FROM dba_role_privs 
+			     WHERE grantee = u.username AND ROWNUM = 1) AS role,
+			    p.privilege
+			FROM v$database d
+			JOIN dba_users u ON u.username = SYS_CONTEXT('USERENV', 'SESSION_USER')
+			JOIN dba_tab_privs p ON p.grantee = u.username
+			WHERE d.name NOT IN (%s);
+		`, excludeDBs)
 	default:
 		return fmt.Errorf("unsupported database type")
 	}
 
-	// Execute query for database status
-	row := db.QueryRow(query)
-	var status string
-
-	switch config.DBType {
-	case "mysql":
-		var uptime int
-		if err := row.Scan(&status, &uptime); err != nil {
-			log.Printf("Database: %s STATUS: %s", dbName, "Inactive")
-			status = "Inactive"
-		} else {
-			status = "Active"
-			log.Printf("Database: %s is Active", dbName)
-		}
-		log.Printf("Database: %s Active: %d seconds", dbName, uptime)
-
-	case "Postgres":
-		var isInRecovery bool
-		if err := row.Scan(&isInRecovery); err != nil {
-			status = "Inactive"
-		} else {
-			status = map[bool]string{true: "In Recovery", false: "Active"}[isInRecovery]
-
-		}
-		log.Printf("Database Status: %s", status)
-
-	case "MSSQL":
-		if err := row.Scan(&status); err != nil {
-			return err
-		}
-		log.Printf("Database Status: %s", status)
-
-	case "Oracle":
-		if err := row.Scan(&status); err != nil {
-			return err
-		}
-		log.Printf("Database Status: %s", status)
-	}
-
-	// Sync database information with the API
-	payload := map[string]interface{}{
-		"orgId":        orgID,
-		"tenantId":     tenantID,
-		"databaseType": config.DBType,
-		"databaseName": dbName,
-		"host":         config.DBHost,
-		"port":         config.DBPort,
-		"status":       status,
-		"uuid":         config.API_KEY,
-	}
-
-	payloadBytes, err := json.Marshal(payload)
+	// Execute the query
+	rows, err := db.Query(query)
 	if err != nil {
-		log.Printf("Error while marshalling the payload: %v", err)
+		return err
+	}
+	defer rows.Close()
 
+	for rows.Next() {
+		var databaseName, status, userName, role, privilege, tableName string
+		if err := rows.Scan(&databaseName, &status, &userName, &role, &privilege, &tableName); err != nil {
+			log.Printf("Error scanning row: %v", err)
+			continue
+		}
+
+		log.Printf("Database: %s, Status: %s, User: %s, Role: %s, Privilege: %s, Table: %s", databaseName, status, userName, role, privilege, tableName)
+
+		// 	// Sync database information with the API
+		// 	payload := map[string]interface{}{
+		// 		"orgId":        orgID,
+		// 		"tenantId":     tenantID,
+		// 		"databaseType": config.DBType,
+		// 		"databaseName": databaseName,
+		// 		"host":         config.DBHost,
+		// 		"port":         config.DBPort,
+		// 		"status":       status,
+		// 		"uuid":         config.API_KEY,
+		// 	}
+
+		// 	payloadBytes, err := json.Marshal(payload)
+		// 	if err != nil {
+		// 		log.Printf("Error while marshalling the payload: %v", err)
+
+		// 	}
+
+		// 	apiURL := config.API + "/api/v1/databaseService/dbSync"
+		// 	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
+		// 	log.Println("Payload Sent: %s", string(payloadBytes))
+
+		// 	if err != nil {
+		// 		log.Printf("Error while creating request: %v", err)
+
+		// 	}
+
+		// 	httpReq.Header.Set("Content-Type", "application/json")
+
+		// 	client := &http.Client{}
+		// 	httpResp, err := client.Do(httpReq)
+		// 	if err != nil {
+		// 		log.Printf("Error while making request: %v", err)
+
+		// 	}
+		// 	defer httpResp.Body.Close()
+
+		// 	body, err := ioutil.ReadAll(httpResp.Body)
+		// 	if err != nil {
+		// 		log.Printf("Error while reading response body: %v", err)
+
+		// 	}
+
+		// 	log.Default().Println("Response from external service: %v", string(body))
 	}
 
-	apiURL := config.API + "/api/v1/databaseService/dbSync"
-	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
-	log.Println("Payload Sent: %s", string(payloadBytes))
-
-	if err != nil {
-		log.Printf("Error while creating request: %v", err)
-
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	httpResp, err := client.Do(httpReq)
-	if err != nil {
-		log.Printf("Error while making request: %v", err)
-
-	}
-	defer httpResp.Body.Close()
-
-	body, err := ioutil.ReadAll(httpResp.Body)
-	if err != nil {
-		log.Printf("Error while reading response body: %v", err)
-
-	}
-	log.Default().Println("Response from external service: %v", string(body))
 	return nil
 }
