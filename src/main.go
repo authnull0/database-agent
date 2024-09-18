@@ -1,10 +1,11 @@
 package main
 
 import (
-	//"database/sql"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	_ "github.com/denisenkom/go-mssqldb"
@@ -30,7 +31,7 @@ func (p *program) Start(s service.Service) error {
 }
 
 func (p *program) run() {
-	startAgent()
+	startAgent(p.exit)
 }
 
 func (p *program) Stop(s service.Service) error {
@@ -59,7 +60,8 @@ func loadConfig(path string) (pkg.DBConfig, error) {
 
 	return config, err
 }
-func startAgent() {
+
+func startAgent(exit chan struct{}) {
 	fmt.Println("Starting Authnull Database Agent...")
 
 	// Load the configuration
@@ -78,15 +80,23 @@ func startAgent() {
 	}
 	defer db.Close()
 
-	//Synchronization loop every one minute
+	// Ticker to run the synchronization every minute
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
 	for {
-		log.Default().Println("DB Synchronization Started...")
-		// Fetch database details and their privileges
-		err = pkg.FetchDatabaseDetails(db, config)
-		if err != nil {
-			log.Fatalf("Failed to fetch database details: %v", err)
+		select {
+		case <-ticker.C:
+			log.Default().Println("DB Synchronization Started...")
+			// Fetch database details and their privileges
+			err = pkg.FetchDatabaseDetails(db, config)
+			if err != nil {
+				log.Printf("Failed to fetch database details: %v", err)
+			}
+		case <-exit:
+			log.Println("Stopping agent...")
+			return
 		}
-		time.Sleep(1 * time.Minute)
 	}
 }
 
@@ -121,7 +131,17 @@ func main() {
 			fmt.Println("Service installed successfully.")
 			return
 		} else if os.Args[1] == "debug" {
-			startAgent()
+			// Signal handling for debug mode
+			exit := make(chan struct{})
+			sigChan := make(chan os.Signal, 1)
+			signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+			go func() {
+				<-sigChan
+				close(exit)
+			}()
+
+			startAgent(exit) // Run in debug mode with signal handling
 			return
 		}
 		err = service.Control(svc, os.Args[1])
@@ -132,6 +152,7 @@ func main() {
 		return
 	}
 
+	// Run as a service
 	err = svc.Run()
 	if err != nil {
 		log.Fatal(err)
