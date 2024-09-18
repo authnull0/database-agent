@@ -27,8 +27,7 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig) error {
     CASE 
         	WHEN p.privilege_type IN ('SUPER', 'CREATE USER', 'GRANT OPTION') THEN 'Admin'
         	ELSE 'User' 
-    END AS role,
-	GROUP_CONCAT(DISTINCT p.privilege_type) AS privileges
+    END AS role
 	FROM 
     information_schema.user_privileges p;
 
