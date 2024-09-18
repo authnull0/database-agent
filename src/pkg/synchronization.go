@@ -11,18 +11,7 @@ var config DBConfig
 func ConnectToDB(config DBConfig) (*sql.DB, error) {
 	var dsn string
 
-	switch config.DBType {
-	case "mysql":
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", config.DBUserName, config.DBPassword, config.DBHost, config.DBPort)
-	case "Postgres":
-		dsn = fmt.Sprintf("postgres://%s:%s@%s:%s/?sslmode=disable", config.DBUserName, config.DBPassword, config.DBHost, config.DBPort)
-	case "MSSQL":
-		dsn = fmt.Sprintf("sqlserver://%s:%s@%s:%s", config.DBUserName, config.DBPassword, config.DBHost, config.DBPort)
-	case "Oracle":
-		dsn = fmt.Sprintf("oracle://%s:%s@%s:%s", config.DBUserName, config.DBPassword, config.DBHost, config.DBPort)
-	default:
-		return nil, fmt.Errorf("unsupported database type")
-	}
+	dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", config.DBUserName, config.DBPassword, config.DBHost, config.DBPort)
 
 	db, err := sql.Open(config.DBType, dsn)
 	if err != nil {
@@ -58,18 +47,8 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 
 	// Fetch database names
 	databasesQuery := ""
-	switch config.DBType {
-	case "mysql":
-		databasesQuery = "SHOW DATABASES"
-	case "Postgres":
-		databasesQuery = "SELECT datname FROM pg_database WHERE datistemplate = false"
-	case "MSSQL":
-		databasesQuery = "SELECT name FROM sys.databases"
-	case "Oracle":
-		databasesQuery = "SELECT name FROM v$database"
-	default:
-		return fmt.Errorf("unsupported database type")
-	}
+
+	databasesQuery = "SHOW DATABASES"
 
 	// Execute query for database names
 	rows, err := db.Query(databasesQuery)

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -17,9 +16,7 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig) error {
 	orgID, _ := strconv.Atoi(config.OrgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
 
-	switch config.DBType {
-	case "mysql":
-		query = `
+	query = `
 			SELECT 
     		SUBSTRING_INDEX(p.grantee, '@', 1) AS username,
     		SUBSTRING_INDEX(p.grantee, '@', -1) AS host,
@@ -31,59 +28,7 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig) error {
 	FROM 
     information_schema.user_privileges p;
 
-`
-	case "postgres":
-		query = `
-			SELECT 
-    		r.rolname AS username,
-    		'pghost' AS host, -- Change this based on your requirements
-    		r.rolname AS privilege,
-    CASE 
-       		 WHEN rolsuper THEN 'Admin'
-       		 ELSE 'User' 
-    END AS role
-	FROM 
-    		pg_catalog.pg_roles r
-	WHERE 
-    		r.rolname NOT LIKE 'pg_%';
-`
-	case "mssql":
-		query = `
-			SELECT 
-    		p.name AS username,
-    		'localhost' AS host, -- Replace this with actual host if required
-    		dp.permission_name AS privilege,
-    	CASE 
-        	WHEN IS_SRVROLEMEMBER('sysadmin', p.name) = 1 THEN 'Admin'
-        	ELSE 'User' 
-    	END AS role
-	FROM 
-    	sys.database_principals p
-	LEFT JOIN 
-    	sys.database_permissions dp ON dp.grantee_principal_id = p.principal_id
-	WHERE 
-    	p.type_desc = 'SQL_USER';
-`
-	case "oracle":
-		query = `
-			SELECT 
-    		grantee AS username,
-    		'pghost' AS host, -- Change as per your requirement
-    		privilege AS privilege,
-    CASE 
-        	WHEN granted_role = 'DBA' THEN 'Admin'
-        	ELSE 'User' 
-    END AS role 
-	FROM 
-    		dba_sys_privs
-	WHERE 
-    		grantee NOT IN ('SYS', 'SYSTEM');
-`
-	default:
-		return fmt.Errorf("unsupported database type")
-	}
-
-	// Execute query to get user privileges at the database level
+` // Execute query to get user privileges at the database level
 	rows, err := db.Query(query)
 	if err != nil {
 		return err

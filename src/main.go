@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -66,6 +67,7 @@ func startAgent(exit chan struct{}) {
 
 	// Load the configuration
 	var err error
+	var timeInterval int
 	config, err = loadConfig("C:\\authnull-db-agent\\")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -73,6 +75,10 @@ func startAgent(exit chan struct{}) {
 
 	log.Printf("Configuration loaded: %v", config)
 
+	timeInterval, err = strconv.Atoi(config.TimeInterval)
+	if err != nil {
+		log.Default().Println(err)
+	}
 	// Connect to the database
 	db, err := pkg.ConnectToDB(config)
 	if err != nil {
@@ -81,7 +87,7 @@ func startAgent(exit chan struct{}) {
 	defer db.Close()
 
 	// Ticker to run the synchronization every minute
-	ticker := time.NewTicker(1 * time.Minute)
+	ticker := time.NewTicker(time.Duration(timeInterval) * time.Minute)
 	defer ticker.Stop()
 
 	for {

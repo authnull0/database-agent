@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -20,57 +19,20 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 	tenantID, _ := strconv.Atoi(config.TenantID)
 	log.Printf("Tenant Id: %d", tenantID)
 
-	switch config.DBType {
-	case "mysql":
-		query = "SHOW STATUS LIKE 'Uptime'"
-	case "Postgres":
-		query = "SELECT pg_is_in_recovery() AS is_in_recovery"
-	case "MSSQL":
-		query = "SELECT state_desc FROM sys.databases WHERE name = DB_NAME()"
-	case "Oracle":
-		query = "SELECT open_mode FROM v$database"
-	default:
-		return fmt.Errorf("unsupported database type")
-	}
-
+	query = "SHOW STATUS LIKE 'Uptime'"
 	// Execute query for database status
 	row := db.QueryRow(query)
 	var status string
 
-	switch config.DBType {
-	case "mysql":
-		var uptime int
-		if err := row.Scan(&status, &uptime); err != nil {
-			log.Printf("Database: %s STATUS: %s", dbName, "Inactive")
-			status = "Inactive"
-		} else {
-			status = "Active"
-			log.Printf("Database: %s is Active", dbName)
-		}
-		log.Printf("Database: %s Active: %d seconds", dbName, uptime)
-
-	case "Postgres":
-		var isInRecovery bool
-		if err := row.Scan(&isInRecovery); err != nil {
-			status = "Inactive"
-		} else {
-			status = map[bool]string{true: "In Recovery", false: "Active"}[isInRecovery]
-
-		}
-		log.Printf("Database Status: %s", status)
-
-	case "MSSQL":
-		if err := row.Scan(&status); err != nil {
-			return err
-		}
-		log.Printf("Database Status: %s", status)
-
-	case "Oracle":
-		if err := row.Scan(&status); err != nil {
-			return err
-		}
-		log.Printf("Database Status: %s", status)
+	var uptime int
+	if err := row.Scan(&status, &uptime); err != nil {
+		log.Printf("Database: %s STATUS: %s", dbName, "Inactive")
+		status = "Inactive"
+	} else {
+		status = "Active"
+		log.Printf("Database: %s is Active", dbName)
 	}
+	log.Printf("Database: %s Active: %d seconds", dbName, uptime)
 
 	// Sync database information with the API
 	payload := map[string]interface{}{
