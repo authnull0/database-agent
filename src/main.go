@@ -1,10 +1,13 @@
 package main
 
 import (
-	//"database/sql"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
 
 	_ "github.com/denisenkom/go-mssqldb"
 	_ "github.com/go-sql-driver/mysql"
@@ -29,7 +32,7 @@ func (p *program) Start(s service.Service) error {
 }
 
 func (p *program) run() {
-	startAgent()
+	startAgent(p.exit)
 }
 
 func (p *program) Stop(s service.Service) error {
@@ -52,13 +55,19 @@ func loadConfig(path string) (pkg.DBConfig, error) {
 
 	var config pkg.DBConfig
 	err = viper.Unmarshal(&config)
+	log.Printf("MAIN FUNCTION")
+	log.Printf("Org ID: %s", config.OrgID)
+	log.Printf("Tenant ID: %s", config.TenantID)
+
 	return config, err
 }
-func startAgent() {
+
+func startAgent(exit chan struct{}) {
 	fmt.Println("Starting Authnull Database Agent...")
 
 	// Load the configuration
 	var err error
+	var timeInterval int
 	config, err = loadConfig("C:\\authnull-db-agent\\")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -66,6 +75,10 @@ func startAgent() {
 
 	log.Printf("Configuration loaded: %v", config)
 
+	timeInterval, err = strconv.Atoi(config.TimeInterval)
+	if err != nil {
+		log.Default().Println(err)
+	}
 	// Connect to the database
 	db, err := pkg.ConnectToDB(config)
 	if err != nil {
@@ -73,10 +86,23 @@ func startAgent() {
 	}
 	defer db.Close()
 
-	// Fetch database details and their privileges
-	err = pkg.FetchDatabaseDetails(db, config.DBType)
-	if err != nil {
-		log.Fatalf("Failed to fetch database details: %v", err)
+	// Ticker to run the synchronization every minute
+	ticker := time.NewTicker(time.Duration(timeInterval) * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			log.Default().Println("DB Synchronization Started...")
+			// Fetch database details and their privileges
+			err = pkg.FetchDatabaseDetails(db, config)
+			if err != nil {
+				log.Printf("Failed to fetch database details: %v", err)
+			}
+		case <-exit:
+			log.Println("Stopping agent...")
+			return
+		}
 	}
 }
 
@@ -111,7 +137,17 @@ func main() {
 			fmt.Println("Service installed successfully.")
 			return
 		} else if os.Args[1] == "debug" {
-			startAgent()
+			// Signal handling for debug mode
+			exit := make(chan struct{})
+			sigChan := make(chan os.Signal, 1)
+			signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+			go func() {
+				<-sigChan
+				close(exit)
+			}()
+
+			startAgent(exit) // Run in debug mode with signal handling
 			return
 		}
 		err = service.Control(svc, os.Args[1])
@@ -122,6 +158,7 @@ func main() {
 		return
 	}
 
+	// Run as a service
 	err = svc.Run()
 	if err != nil {
 		log.Fatal(err)
