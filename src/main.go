@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -62,10 +63,12 @@ func loadConfig(path string) (pkg.DBConfig, error) {
 }
 
 func startAgent(exit chan struct{}) {
+	var err error
 	fmt.Println("Starting Authnull Database Agent...")
 
+	var timeInterval int
+
 	// Load the configuration
-	var err error
 	config, err = loadConfig("C:\\authnull-db-agent\\")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -73,23 +76,30 @@ func startAgent(exit chan struct{}) {
 
 	log.Printf("Configuration loaded: %v", config)
 
-	// Connect to the database
-	db, err := pkg.ConnectToDB(config)
+	timeInterval, err = strconv.Atoi(config.TimeInterval)
 	if err != nil {
-		log.Fatalf("Failed to connect to DB: %v", err)
+		log.Fatalf("Failed to convert TimeInterval: %v", err)
 	}
-	defer db.Close()
 
 	// Ticker to run the synchronization every minute
-	ticker := time.NewTicker(1 * time.Minute)
+	ticker := time.NewTicker(time.Duration(timeInterval) * time.Minute)
+	log.Default().Printf("Agent Starts synchronizing every %d minutes", timeInterval)
+
 	defer ticker.Stop()
+
+	err = pkg.ConnectToDB(config)
+	if err != nil {
+		log.Fatalf("Failed to connect to database and synchronize: %v", err)
+	}
 
 	for {
 		select {
 		case <-ticker.C:
 			log.Default().Println("DB Synchronization Started...")
 			// Fetch database details and their privileges
-			err = pkg.FetchDatabaseDetails(db, config)
+			err := pkg.ConnectToDB(config)
+			//log.Printf("Db %+v", db)
+
 			if err != nil {
 				log.Printf("Failed to fetch database details: %v", err)
 			}

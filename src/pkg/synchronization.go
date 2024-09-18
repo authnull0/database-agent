@@ -8,105 +8,71 @@ import (
 
 var config DBConfig
 
-func ConnectToDB(config DBConfig) (*sql.DB, error) {
-	var dsn string
+func ConnectToDB(config DBConfig) error {
+	log.Default().Println("Inside the connect to db")
 
-	switch config.DBType {
-	case "mysql":
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", config.DBUserName, config.DBPassword, config.DBHost, config.DBPort)
-	case "Postgres":
-		dsn = fmt.Sprintf("postgres://%s:%s@%s:%s/?sslmode=disable", config.DBUserName, config.DBPassword, config.DBHost, config.DBPort)
-	case "MSSQL":
-		dsn = fmt.Sprintf("sqlserver://%s:%s@%s:%s", config.DBUserName, config.DBPassword, config.DBHost, config.DBPort)
-	case "Oracle":
-		dsn = fmt.Sprintf("oracle://%s:%s@%s:%s", config.DBUserName, config.DBPassword, config.DBHost, config.DBPort)
-	default:
-		return nil, fmt.Errorf("unsupported database type")
-	}
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/", config.DBUserName, config.DBPassword, config.DBHost, config.DBPort)
 
 	db, err := sql.Open(config.DBType, dsn)
 	if err != nil {
-		return nil, err
-	}
-	return db, nil
-}
-
-// checks if a given database is a system default database
-func isSystemDatabase(dbName, dbType string) bool {
-	systemDatabases := map[string][]string{
-		"mysql":    {"mysql", "information_schema", "performance_schema", "sys"},
-		"Postgres": {"postgres", "template0", "template1"},
-		"MSSQL":    {"master", "tempdb", "model", "msdb"},
-		"Oracle":   {"SYSTEM", "SYSAUX"},
-	}
-
-	// Get the list of system default databases
-	if systemDbs, ok := systemDatabases[dbType]; ok {
-		for _, systemDb := range systemDbs {
-			if dbName == systemDb {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// FetchDatabaseDetails fetches the database names, statuses, and table privileges
-// skipping system databases
-func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
-	var databases []string
-
-	// Fetch database names
-	databasesQuery := ""
-	switch config.DBType {
-	case "mysql":
-		databasesQuery = "SHOW DATABASES"
-	case "Postgres":
-		databasesQuery = "SELECT datname FROM pg_database WHERE datistemplate = false"
-	case "MSSQL":
-		databasesQuery = "SELECT name FROM sys.databases"
-	case "Oracle":
-		databasesQuery = "SELECT name FROM v$database"
-	default:
-		return fmt.Errorf("unsupported database type")
-	}
-
-	// Execute query for database names
-	rows, err := db.Query(databasesQuery)
-	if err != nil {
+		log.Default().Printf("Error opening DB connection: %v", err)
 		return err
 	}
-	defer rows.Close()
+	log.Default().Println("DB connection opened")
 
-	for rows.Next() {
-		var dbName string
-		if err := rows.Scan(&dbName); err != nil {
+	query := `SELECT 
+    SUBSTRING_INDEX(p.grantee, '@', 1) AS username,
+    SUBSTRING_INDEX(p.grantee, '@', -1) AS host,
+    CASE 
+        WHEN EXISTS (
+            SELECT 1 
+            FROM information_schema.user_privileges 
+            WHERE grantee = p.grantee 
+              AND privilege_type IN ('GRANT OPTION', 'CREATE', 'DROP', 'ALTER', 'INDEX')
+        ) THEN 'Admin'
+        ELSE 'User'
+    END AS role,
+    GROUP_CONCAT(DISTINCT p.privilege_type) AS privileges,
+    p.table_schema AS database_name
+FROM 
+    information_schema.schema_privileges p
+WHERE 
+    p.table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')  -- Exclude specific system databases
+GROUP BY 
+    p.grantee, p.table_schema
+ORDER BY 
+    p.table_schema, username;`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		log.Default().Printf("Error executing query: %v", err)
+		return err
+	}
+	defer rows.Close() // Move defer to immediately after checking for query error
+
+	log.Default().Println("Query Executed..")
+
+	// Check if we have any rows
+	if !rows.Next() {
+		log.Println("No rows returned from the query.")
+		return nil // or return an appropriate error
+	}
+
+	// If we reach here, we have rows to process
+	for {
+		var databasename, username, host, role, privileges string
+		if err := rows.Scan(&username, &host, &role, &privileges, &databasename); err != nil {
 			return err
 		}
+		log.Printf("Database Name: %s, User: %s, Host: %s, Privileges: %s, Role: %s", databasename, username, host, privileges, role)
 
-		// Skip system databases
-		if isSystemDatabase(dbName, config.DBType) {
-			log.Printf("Skipping system database: %s", dbName)
-			continue
+		if !rows.Next() {
+			break // Exit the loop if there are no more rows
 		}
+	}
 
-		databases = append(databases, dbName)
-
-		// Fetch database status
-
-		err = FetchDatabaseStatus(db, dbName, config)
-
-		if err != nil {
-			log.Printf("Failed to fetch status for database %s: %v", dbName, err)
-		}
-		log.Println("FetchDatabaseStatus Ended")
-
-		// Fetch tables and privileges for each database
-		err = FetchTablePrivileges(db, dbName, config)
-		if err != nil {
-			log.Printf("Failed to fetch table privileges for database %s: %v", dbName, err)
-		}
-		log.Println("FetchDatabasePrivileges Ended")
+	if err = rows.Err(); err != nil {
+		return err
 	}
 
 	return nil
