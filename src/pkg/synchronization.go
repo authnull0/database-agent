@@ -6,12 +6,12 @@ import (
 	"log"
 )
 
-var config DBConfig
+//var config DBConfig
 
-func ConnectToDB(config DBConfig) (*sql.DB, error) {
+func ConnectToDB(config DBConfig, dbUserName string, dbPassword string, dbHost string) (*sql.DB, error) {
 	var dsn string
 
-	dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", config.DBUserName, config.DBPassword, config.DBHost, config.DBPort)
+	dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", dbUserName, dbPassword, dbHost, config.Port)
 
 	db, err := sql.Open(config.DBType, dsn)
 	if err != nil {
@@ -42,7 +42,7 @@ func isSystemDatabase(dbName, dbType string) bool {
 
 // FetchDatabaseDetails fetches the database names, statuses, and table privileges
 // skipping system databases
-func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
+func FetchDatabaseDetails(db *sql.DB, config DBConfig, dbHost string, apiKey string) error {
 	var databases []string
 
 	// Fetch database names
@@ -72,8 +72,7 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		databases = append(databases, dbName)
 
 		// Fetch database status
-
-		err = FetchDatabaseStatus(db, dbName, config)
+		err = FetchDatabaseStatus(db, dbName, config, dbHost, apiKey)
 
 		if err != nil {
 			log.Printf("Failed to fetch status for database %s: %v", dbName, err)

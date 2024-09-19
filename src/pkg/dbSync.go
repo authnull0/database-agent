@@ -11,7 +11,7 @@ import (
 )
 
 // FetchDatabaseStatus fetches the status of a database
-func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
+func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, dbHost string, apiKey string) error {
 	var query string
 
 	orgID, _ := strconv.Atoi(config.OrgID)
@@ -40,10 +40,10 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 		"tenantId":     tenantID,
 		"databaseType": config.DBType,
 		"databaseName": dbName,
-		"host":         config.DBHost,
-		"port":         config.DBPort,
+		"port":         config.Port,
+		"host":         dbHost,
 		"status":       status,
-		"uuid":         config.API_KEY,
+		"uuid":         apiKey,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
