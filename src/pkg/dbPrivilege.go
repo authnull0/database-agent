@@ -18,17 +18,23 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig) error {
 
 	query = `
 			SELECT 
-    		SUBSTRING_INDEX(p.grantee, '@', 1) AS username,
-    		SUBSTRING_INDEX(p.grantee, '@', -1) AS host,
-    		p.privilege_type AS privilege,
+    SUBSTRING_INDEX(p.grantee, '@', 1) AS username,
+    SUBSTRING_INDEX(p.grantee, '@', -1) AS host,
+    GROUP_CONCAT(p.privilege_type ORDER BY p.privilege_type SEPARATOR ', ') AS privileges,
     CASE 
-        	WHEN p.privilege_type IN ('SUPER', 'CREATE USER', 'GRANT OPTION') THEN 'Admin'
-        	ELSE 'User' 
+        WHEN FIND_IN_SET('SUPER', GROUP_CONCAT(p.privilege_type)) > 0 
+          OR FIND_IN_SET('CREATE USER', GROUP_CONCAT(p.privilege_type)) > 0
+          OR FIND_IN_SET('GRANT OPTION', GROUP_CONCAT(p.privilege_type)) > 0 
+        THEN 'Admin'
+        ELSE 'User'
     END AS role
-	FROM 
-    information_schema.user_privileges p;
+FROM 
+    information_schema.user_privileges p
+GROUP BY 
+    username, host;
 
-` // Execute query to get user privileges at the database level
+`
+	// Execute query to get user privileges at the database level
 	rows, err := db.Query(query)
 	if err != nil {
 		return err
@@ -45,12 +51,14 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig) error {
 
 		// Send the username to the dbUser API
 		userPayload := map[string]interface{}{
-			"orgID":        orgID,
+			"orgId":        orgID,
 			"tenantId":     tenantID,
 			"databaseType": config.DBType,
 			"databaseName": dbName,
 			"userName":     username,
+			"host":         host,
 			"role":         role,
+			"privilege":    privileges,
 		}
 
 		userPayloadBytes, err := json.Marshal(userPayload)
@@ -87,49 +95,6 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig) error {
 		}
 		log.Printf("Response from dbUser API: %v", string(userResponseBody))
 
-		// Send the username and privileges to the dbPrivileges API
-		privilegePayload := map[string]interface{}{
-			"orgID":         orgID,
-			"tenantId":      tenantID,
-			"databaseType":  config.DBType,
-			"databaseName":  dbName,
-			"userName":      username,
-			"host":          host,
-			"privilegeType": privileges,
-		}
-
-		privilegePayloadBytes, err := json.Marshal(privilegePayload)
-		if err != nil {
-			log.Printf("Error while marshalling the privilege payload: %v", err)
-			continue
-		}
-
-		privilegeAPIURL := config.API + "/api/v1/databaseService/dbPrivilege"
-		log.Printf("Sending Privilege Payload to API %s", privilegeAPIURL)
-
-		httpReq, err = http.NewRequest("POST", privilegeAPIURL, bytes.NewBuffer(privilegePayloadBytes))
-		log.Println("Payload Sent:")
-		log.Println(string(privilegePayloadBytes))
-
-		if err != nil {
-			log.Printf("Error while creating privilege request: %v", err)
-			continue
-		}
-
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpResp, err = client.Do(httpReq)
-		if err != nil {
-			log.Printf("Error while sending privilege request: %v", err)
-			continue
-		}
-		defer httpResp.Body.Close()
-
-		privilegeResponseBody, err := ioutil.ReadAll(httpResp.Body)
-		if err != nil {
-			log.Printf("Error while reading privilege response body: %v", err)
-			continue
-		}
-		log.Printf("Response from dbPrivilege API: %v", string(privilegeResponseBody))
 	}
 
 	return nil
