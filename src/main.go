@@ -117,13 +117,13 @@ func main() {
 	dbHost := flag.String("host", "", "Database host")
 	dbUserName := flag.String("username", "", "Database username")
 	dbPassword := flag.String("password", "", "Database password")
-	apiKey := flag.String("apikey", "", "API key")
+	//apiKey := flag.String("apikey", "", "API key")
 	mode := flag.String("mode", "", "Mode of operation: install, start, stop, restart, uninstall, debug,service")
 
 	flag.Parse()
 
 	// Validate required inputs
-	if *dbHost == "" || *dbUserName == "" || *dbPassword == "" || *apiKey == "" || *mode == "" {
+	if *dbHost == "" || *dbUserName == "" || *dbPassword == "" || *mode == "" {
 		fmt.Println("Missing required arguments. Ensure all values are provided (host, username, password,  apikey, mode).")
 		os.Exit(1)
 	}
@@ -206,7 +206,7 @@ func main() {
 			close(exit)
 		}()
 
-		startAgent(exit, config.Port, *dbUserName, *dbPassword, *dbHost, *apiKey)
+		startAgent(exit, config.Port, *dbUserName, *dbPassword, *dbHost, config.APIKey)
 		return
 
 	case "service":
