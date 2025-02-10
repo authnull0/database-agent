@@ -73,7 +73,7 @@ func startAgent(exit chan struct{}, Port, dbUserName, dbPassword, dbHost, apiKey
 	// Load the configuration
 	var err error
 	var timeInterval int
-	config, err = loadConfig("C:\\authnull-db-agent\\")
+	config, err = loadConfig("/etc/authnull-db-agent/")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -128,7 +128,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fileName := "C:\\authnull-db-agent\\agent.log"
+	fileName := "/var/log/authnull-db-agent.log"
 	logFile, err := os.OpenFile(fileName, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		log.Panic(err)
