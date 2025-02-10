@@ -7,4 +7,5 @@ type DBConfig struct {
 	Port         string `mapstructure:"DB_PORT"`
 	TimeInterval string `mapstructure:"TIME_INTERVAL"`
 	API          string `mapstructure:"API"`
+	APIKey       string `mapstructure:"KEY"`
 }

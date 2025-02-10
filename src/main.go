@@ -27,7 +27,7 @@ type program struct {
 	dbUserName string
 	dbPassword string
 	dbHost     string
-	apiKey     string
+	//apiKey     string
 }
 
 func (p *program) Start(s service.Service) error {
@@ -37,7 +37,7 @@ func (p *program) Start(s service.Service) error {
 }
 
 func (p *program) Run() {
-	startAgent(p.exit, config.Port, p.dbUserName, p.dbPassword, p.dbHost, p.apiKey)
+	startAgent(p.exit, config.Port, p.dbUserName, p.dbPassword, p.dbHost, config.APIKey)
 }
 
 func (p *program) Stop(s service.Service) error {
@@ -149,7 +149,7 @@ func main() {
 		dbUserName: *dbUserName,
 		dbPassword: *dbPassword,
 		dbHost:     *dbHost,
-		apiKey:     *apiKey,
+		//apiKey:     *apiKey,
 	}
 
 	svc, err := service.New(prg, svcConfig)
