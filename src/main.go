@@ -37,7 +37,7 @@ func (p *program) Start(s service.Service) error {
 }
 
 func (p *program) Run() {
-	startAgent(p.exit, config.Port, p.dbUserName, p.dbPassword, p.dbHost, config.APIKey)
+	startAgent(p.exit, p.dbUserName, p.dbPassword, p.dbHost)
 }
 
 func (p *program) Stop(s service.Service) error {
@@ -67,7 +67,7 @@ func loadConfig(path string) (pkg.DBConfig, error) {
 	return config, err
 }
 
-func startAgent(exit chan struct{}, Port, dbUserName, dbPassword, dbHost, apiKey string) {
+func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost string) {
 	fmt.Println("Starting Authnull Database Agent...")
 
 	// Load the configuration
@@ -100,7 +100,7 @@ func startAgent(exit chan struct{}, Port, dbUserName, dbPassword, dbHost, apiKey
 		case <-ticker.C:
 			log.Default().Println("DB Synchronization Started...")
 			// Fetch database details and their privileges
-			err = pkg.FetchDatabaseDetails(db, config, dbHost, apiKey)
+			err = pkg.FetchDatabaseDetails(db, config, dbHost)
 			if err != nil {
 				log.Printf("Failed to fetch database details: %v", err)
 			}
@@ -206,7 +206,7 @@ func main() {
 			close(exit)
 		}()
 
-		startAgent(exit, config.Port, *dbUserName, *dbPassword, *dbHost, config.APIKey)
+		startAgent(exit, *dbUserName, *dbPassword, *dbHost)
 		return
 
 	case "service":

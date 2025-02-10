@@ -42,7 +42,7 @@ func isSystemDatabase(dbName, dbType string) bool {
 
 // FetchDatabaseDetails fetches the database names, statuses, and table privileges
 // skipping system databases
-func FetchDatabaseDetails(db *sql.DB, config DBConfig, dbHost string, apiKey string) error {
+func FetchDatabaseDetails(db *sql.DB, config DBConfig, dbHost string) error {
 	var databases []string
 
 	// Fetch database names
@@ -72,7 +72,7 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig, dbHost string, apiKey str
 		databases = append(databases, dbName)
 
 		// Fetch database status
-		err = FetchDatabaseStatus(db, dbName, config, dbHost, apiKey)
+		err = FetchDatabaseStatus(db, dbName, config, dbHost)
 
 		if err != nil {
 			log.Printf("Failed to fetch status for database %s: %v", dbName, err)

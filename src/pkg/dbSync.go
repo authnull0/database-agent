@@ -11,13 +11,14 @@ import (
 )
 
 // FetchDatabaseStatus fetches the status of a database
-func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, dbHost string, apiKey string) error {
+func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, dbHost string) error {
 	var query string
 
 	orgID, _ := strconv.Atoi(config.OrgID)
 	log.Printf("Org Id: %d", orgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
 	log.Printf("Tenant Id: %d", tenantID)
+	log.Printf("UUID is : %s", config.APIKey)
 
 	query = "SHOW STATUS LIKE 'Uptime'"
 	// Execute query for database status
@@ -43,7 +44,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, dbHost stri
 		"port":         config.Port,
 		"host":         dbHost,
 		"status":       status,
-		"uuid":         apiKey,
+		"uuid":         config.APIKey,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -54,7 +55,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, dbHost stri
 
 	apiURL := config.API + "/api/v1/databaseService/dbSync"
 	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
-	log.Println("Payload Sent: %s", string(payloadBytes))
+	log.Printf("Payload Sent: %s", string(payloadBytes))
 
 	if err != nil {
 		log.Printf("Error while creating request: %v", err)
@@ -76,6 +77,6 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, dbHost stri
 		log.Printf("Error while reading response body: %v", err)
 
 	}
-	log.Default().Println("Response from external service: %v", string(body))
+	log.Default().Printf("Response from external service: %v", string(body))
 	return nil
 }
