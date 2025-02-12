@@ -92,7 +92,7 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 		fmt.Printf("Failed to connect to DB: %v", err)
 		//      os.Exit(1)
 	}
-	log.Default().Printf("Database connection establised successfully..")
+	//log.Default().Printf("Database connection establised successfully..")
 	defer db.Close()
 
 	// Ticker to run the synchronization every minute
