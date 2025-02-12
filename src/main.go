@@ -90,9 +90,9 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %v", err)
 		fmt.Printf("Failed to connect to DB: %v", err)
-	//	os.Exit(1)
+		os.Exit(1)
 	}
-	log.Default().Printf("Database connection establised successfully..")
+	//log.Default().Printf("Database connection establised successfully..")
 	defer db.Close()
 
 	// Ticker to run the synchronization every minute
@@ -107,6 +107,8 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 			err = pkg.FetchDatabaseDetails(db, config, dbHost)
 			if err != nil {
 				log.Printf("Failed to fetch database details: %v", err)
+				fmt.Printf("Failed to fetch database details: %v", err)
+				os.Exit(1)
 			}
 		case <-exit:
 			log.Println("Stopping agent...")
