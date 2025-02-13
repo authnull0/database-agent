@@ -73,7 +73,7 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 	// Load the configuration
 	var err error
 	var timeInterval int
-	config, err = loadConfig("/etc/authnull-db-agent/")
+	config, err = loadConfig("./")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
