@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -118,19 +117,19 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 func main() {
 	// Command-line flags for user inputs
 	//dbPort := flag.String("port", "", "Database port")
-	dbHost := flag.String("host", "", "Database host")
-	dbUserName := flag.String("username", "", "Database username")
-	dbPassword := flag.String("password", "", "Database password")
+	// dbHost := flag.String("host", "", "Database host")
+	// dbUserName := flag.String("username", "", "Database username")
+	// dbPassword := flag.String("password", "", "Database password")
 	//apiKey := flag.String("apikey", "", "API key")
 	//mode := flag.String("mode", "", "Mode of operation: install, start, stop, restart, uninstall, debug,service")
 
-	flag.Parse()
+	// flag.Parse()
 
-	// Validate required inputs
-	if *dbHost == "" || *dbUserName == "" || *dbPassword == "" {
-		fmt.Println("Missing required arguments. Ensure all values are provided (host, username, password,  apikey, mode).")
-		os.Exit(1)
-	}
+	// // Validate required inputs
+	// if *dbHost == "" || *dbUserName == "" || *dbPassword == "" {
+	// 	fmt.Println("Missing required arguments. Ensure all values are provided (host, username, password,  apikey, mode).")
+	// 	os.Exit(1)
+	// }
 
 	fileName := "/var/log/authnull-db-agent.log"
 	logFile, err := os.OpenFile(fileName, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0644)
@@ -152,6 +151,6 @@ func main() {
 		close(exit)
 	}()
 
-	startAgent(exit, *dbUserName, *dbPassword, *dbHost)
+	startAgent(exit, config.Host, config.User, config.Password)
 
 }
