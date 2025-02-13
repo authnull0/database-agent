@@ -122,12 +122,12 @@ func main() {
 	dbUserName := flag.String("username", "", "Database username")
 	dbPassword := flag.String("password", "", "Database password")
 	//apiKey := flag.String("apikey", "", "API key")
-	mode := flag.String("mode", "", "Mode of operation: install, start, stop, restart, uninstall, debug,service")
+	//mode := flag.String("mode", "", "Mode of operation: install, start, stop, restart, uninstall, debug,service")
 
 	flag.Parse()
 
 	// Validate required inputs
-	if *dbHost == "" || *dbUserName == "" || *dbPassword == "" || *mode == "" {
+	if *dbHost == "" || *dbUserName == "" || *dbPassword == "" {
 		fmt.Println("Missing required arguments. Ensure all values are provided (host, username, password,  apikey, mode).")
 		os.Exit(1)
 	}
@@ -141,87 +141,17 @@ func main() {
 	log.SetOutput(logFile)
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
 
-	// Service configuration
-	svcConfig := &service.Config{
-		Name:        "AuthnullDatabaseService",
-		DisplayName: "Authnull Database Service",
-		Description: "A service to synchronize database information.",
-	}
+	// Signal handling to allow graceful shutdown
+	exit := make(chan struct{})
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	prg := &program{
+	go func() {
+		sig := <-sigChan
+		log.Printf("Received signal: %s, stopping the agent...", sig)
+		close(exit)
+	}()
 
-		dbUserName: *dbUserName,
-		dbPassword: *dbPassword,
-		dbHost:     *dbHost,
-		//apiKey:     *apiKey,
-	}
-
-	svc, err := service.New(prg, svcConfig)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Handle modes (install, start, stop, restart, uninstall, debug)
-	switch *mode {
-	case "install":
-		err = svc.Install()
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println("Service installed successfully.")
-		return
-	case "start":
-		err = svc.Start()
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println("Service started.")
-		return
-	case "stop":
-		err = svc.Stop()
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println("Service stopped.")
-		return
-	case "restart":
-		err = svc.Restart()
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println("Service restarted.")
-		return
-	case "uninstall":
-		err = svc.Uninstall()
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println("Service uninstalled.")
-		return
-	case "debug":
-		// Debug mode, run the agent without installing the service
-		exit := make(chan struct{})
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-		go func() {
-			sig := <-sigChan
-			log.Printf("Received signal: %s, stopping the agent...", sig)
-			close(exit)
-		}()
-
-		startAgent(exit, *dbUserName, *dbPassword, *dbHost)
-		return
-
-	case "service":
-		err = svc.Run()
-		if err != nil {
-			log.Fatal(err)
-		}
-
-	default:
-		fmt.Println("Invalid mode. Usage: install | start | stop | restart | uninstall | debug")
-		os.Exit(1)
-	}
+	startAgent(exit, *dbUserName, *dbPassword, *dbHost)
 
 }
