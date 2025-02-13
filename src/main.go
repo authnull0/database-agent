@@ -151,6 +151,7 @@ func main() {
 		close(exit)
 	}()
 
-	startAgent(exit, config.Host, config.User, config.Password)
+//	startAgent(exit, config.Host, config.User, config.Password)
+startAgent(exit, config.User, config.Password, config.Host)
 
 }

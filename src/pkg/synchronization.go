@@ -11,7 +11,12 @@ import (
 func ConnectToDB(config DBConfig, dbUserName string, dbPassword string, dbHost string) (*sql.DB, error) {
 	var dsn string
 
-	dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", dbUserName, dbPassword, dbHost, config.Port)
+//	dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", dbUserName, dbPassword, dbHost, config.Port)
+dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", config.User, config.Password, config.Host, config.Port)
+	log.Default().Println("The connect to db parameters")
+	log.Default().Println(config.Host)
+	log.Default().Println(config.User)
+	log.Default().Println(config.Password)
 
 	db, err := sql.Open(config.DBType, dsn)
 	if err != nil {
