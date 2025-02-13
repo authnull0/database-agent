@@ -22,13 +22,8 @@ File Path for authnull-db-agent.log file
 /var/log/authnull-db-agent.log
 
 
-Command to run agent in debug mode 
+Command to run agent 
 
-./authnull-db-agent -host "localhost" -username "root" -password "password" -mode "debug"
-
-
-Command to run agent in service mode 
-
-./authnull-db-agent -host "localhost" -username "root" -password "password" -mode "service"
+./authnull-db-agent -host "localhost" -username "root" -password "password"
 
 
