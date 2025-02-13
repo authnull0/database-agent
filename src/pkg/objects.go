@@ -8,4 +8,7 @@ type DBConfig struct {
 	TimeInterval string `mapstructure:"TIME_INTERVAL"`
 	API          string `mapstructure:"API"`
 	APIKey       string `mapstructure:"KEY"`
+	Host         string `mapstructure:"DB_HOST"`
+	User         string `mapstructure:"DB_USER"`
+	Password     string `mapstructure:"DB_PASSWORD"`
 }
