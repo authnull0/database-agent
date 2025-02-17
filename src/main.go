@@ -103,7 +103,7 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 		case <-ticker.C:
 			log.Default().Println("DB Synchronization Started...")
 			// Fetch database details and their privileges
-			err = pkg.FetchDatabaseDetails(db, config, dbHost)
+			err = pkg.FetchDatabaseDetails(db, config)
 			if err != nil {
 				log.Printf("Failed to fetch database details: %v", err)
 			}
@@ -151,7 +151,6 @@ func main() {
 		close(exit)
 	}()
 
-//	startAgent(exit, config.Host, config.User, config.Password)
-startAgent(exit, config.User, config.Password, config.Host)
+	startAgent(exit, config.Host, config.User, config.Password)
 
 }
