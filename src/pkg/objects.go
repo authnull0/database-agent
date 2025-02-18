@@ -12,3 +12,9 @@ type DBConfig struct {
 	Password     string `mapstructure:"DB_PASSWORD"`
 	Key          string `mapstructure:"KEY"`
 }
+
+type CheckDBResponse struct {
+	Success   bool     `json:"success"`
+	Message   string   `json:"message"`
+	Databases []string `json:"databases"` // List of database names to create
+}

@@ -79,6 +79,14 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		}
 		log.Println("FetchDatabaseStatus Ended")
 
+		// Fetch database status
+		err = CheckDatabaseStatus(db, config)
+
+		if err != nil {
+			log.Printf("Failed to check status for database %s: %v", dbName, err)
+		}
+		log.Println("CheckDatabaseStatus Ended")
+
 		// Fetch tables and privileges for each database
 		err = FetchTablePrivileges(db, dbName, config)
 		if err != nil {
