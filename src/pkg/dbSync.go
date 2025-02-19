@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 )
 
@@ -35,6 +37,13 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 	}
 	log.Printf("Database: %s Active: %d seconds", dbName, uptime)
 
+  hostname, err := os.Hostname()
+  outboundIP := GetOutboundIP()
+  if err != nil {
+    log.Printf("Cannot retrieve hostname")
+  }
+  log.Printf("Retrieved hostname and outboundIP: %s, %s", hostname, outboundIP)
+
 	// Sync database information with the API
 	payload := map[string]interface{}{
 		"orgId":        orgID,
@@ -45,6 +54,8 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 		"host":         config.Host,
 		"status":       status,
 		"uuid":         config.APIKey,
+    "publicIp":     outboundIP,
+    "hostname":     hostname,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -72,11 +83,22 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 	}
 	defer httpResp.Body.Close()
 
-	body, err := ioutil.ReadAll(httpResp.Body)
+	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		log.Printf("Error while reading response body: %v", err)
 
 	}
 	log.Default().Printf("Response from external service: %v", string(body))
 	return nil
+}
+
+func GetOutboundIP() net.IP {
+  conn, err := net.Dial("udp", "8.8.8.8:80")
+  if err != nil {
+    log.Fatal(err)
+  }
+  defer conn.Close()
+
+  localAddr := conn.LocalAddr().(*net.UDPAddr)
+  return localAddr.IP
 }
