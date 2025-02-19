@@ -38,9 +38,11 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 	log.Printf("Database: %s Active: %d seconds", dbName, uptime)
 
   hostname, err := os.Hostname()
+  outboundIP := GetOutboundIP()
   if err != nil {
     log.Printf("Cannot retrieve hostname")
   }
+  log.Printf("Retrieved hostname and outboundIP: %s, %s", hostname, outboundIP)
 
 	// Sync database information with the API
 	payload := map[string]interface{}{
@@ -52,7 +54,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 		"host":         config.Host,
 		"status":       status,
 		"uuid":         config.APIKey,
-    "publicIp":     GetOutboundIP(),
+    "publicIp":     outboundIP,
     "hostname":     hostname,
 	}
 
