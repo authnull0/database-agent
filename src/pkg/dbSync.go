@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
+
+	"github.com/authnull0/database-agent/utils"
 )
 
 // FetchDatabaseStatus fetches the status of a database
@@ -34,6 +38,16 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 	}
 	log.Printf("Database: %s Active: %d seconds", dbName, uptime)
 
+	instanceName, _ := os.Hostname()
+	log.Default().Println("Register Agent", instanceName)
+
+	ipAddr, err := utils.GetPublicIP()
+	if err != nil {
+		fmt.Println("Failed to get PublicIp Address", err)
+		//return ""
+	}
+	log.Default().Println("IP Address:", ipAddr)
+
 	// Sync database information with the API
 	payload := map[string]interface{}{
 		"orgId":        orgID,
@@ -44,6 +58,8 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 		"host":         config.Host,
 		"status":       status,
 		"uuid":         config.Key,
+		"publicIp":     ipAddr,
+		"instanceName": instanceName,
 	}
 
 	payloadBytes, err := json.Marshal(payload)

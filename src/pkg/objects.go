@@ -12,3 +12,12 @@ type DBConfig struct {
 	Password     string `mapstructure:"DB_PASSWORD"`
 	Key          string `mapstructure:"KEY"`
 }
+
+type InstanceCreatedResponse struct {
+	// instance_id
+	InstanceId string
+	// code
+	Code string
+	// message
+	Message string
+}
