@@ -7,8 +7,18 @@ type DBConfig struct {
 	Port         string `mapstructure:"DB_PORT"`
 	TimeInterval string `mapstructure:"TIME_INTERVAL"`
 	API          string `mapstructure:"API"`
-	APIKey       string `mapstructure:"KEY"`
 	Host         string `mapstructure:"DB_HOST"`
 	User         string `mapstructure:"DB_USER"`
 	Password     string `mapstructure:"DB_PASSWORD"`
+	Key          string `mapstructure:"KEY"`
+	MachineKey   string `mapstructure:"MACHINE_KEY"`
+}
+
+type InstanceCreatedResponse struct {
+	// instance_id
+	InstanceId string
+	// code
+	Code string
+	// message
+	Message string
 }

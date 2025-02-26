@@ -8,15 +8,10 @@ import (
 
 //var config DBConfig
 
-func ConnectToDB(config DBConfig, dbUserName string, dbPassword string, dbHost string) (*sql.DB, error) {
+func ConnectToDB(config DBConfig) (*sql.DB, error) {
 	var dsn string
 
-	//	dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", dbUserName, dbPassword, dbHost, config.Port)
 	dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", config.User, config.Password, config.Host, config.Port)
-	log.Default().Println("The connect to db parameters")
-	log.Default().Println(config.Host)
-	log.Default().Println(config.User)
-	log.Default().Println(config.Password)
 
 	db, err := sql.Open(config.DBType, dsn)
 	if err != nil {
@@ -76,8 +71,25 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 
 		databases = append(databases, dbName)
 
+		// Register the database agent
+		instanceId := RegisterAgent(db, dbName, config)
+		log.Default().Printf("Instance Id: %v", instanceId)
+
+		if err != nil {
+			log.Printf("Failed to register agent for the database %s: %v", dbName, err)
+		}
+		log.Println("Regitser Agent Ended")
+
+		// Last Active Time Function call
+		err = LastActive(instanceId, db, dbName, config)
+
+		if err != nil {
+			log.Printf("Failed to get last active time of the database %s: %v", dbName, err)
+		}
+		log.Println("Last Active Time call  Ended")
+
 		// Fetch database status
-		err = FetchDatabaseStatus(db, dbName, config)
+		err = FetchDatabaseStatus(db, dbName, config, instanceId)
 
 		if err != nil {
 			log.Printf("Failed to fetch status for database %s: %v", dbName, err)
@@ -85,7 +97,7 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		log.Println("FetchDatabaseStatus Ended")
 
 		// Fetch tables and privileges for each database
-		err = FetchTablePrivileges(db, dbName, config)
+		err = FetchTablePrivileges(db, dbName, config, instanceId)
 		if err != nil {
 			log.Printf("Failed to fetch table privileges for database %s: %v", dbName, err)
 		}

@@ -4,21 +4,25 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
+
+	"github.com/authnull0/database-agent/utils"
 )
 
 // FetchDatabaseStatus fetches the status of a database
-func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
+func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId string) error {
 	var query string
 
 	orgID, _ := strconv.Atoi(config.OrgID)
 	log.Printf("Org Id: %d", orgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
 	log.Printf("Tenant Id: %d", tenantID)
-	log.Printf("UUID is : %s", config.APIKey)
+	//	instanceID, _ := strconv.Atoi(instanceId)
 
 	query = "SHOW STATUS LIKE 'Uptime'"
 	// Execute query for database status
@@ -35,6 +39,16 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 	}
 	log.Printf("Database: %s Active: %d seconds", dbName, uptime)
 
+	instanceName, _ := os.Hostname()
+	log.Default().Println("Register Agent", instanceName)
+
+	ipAddr, err := utils.GetPublicIP()
+	if err != nil {
+		fmt.Println("Failed to get PublicIp Address", err)
+		//return ""
+	}
+	log.Default().Println("IP Address:", ipAddr)
+
 	// Sync database information with the API
 	payload := map[string]interface{}{
 		"orgId":        orgID,
@@ -44,7 +58,8 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 		"port":         config.Port,
 		"host":         config.Host,
 		"status":       status,
-		"uuid":         config.APIKey,
+		"uuid":         config.Key,
+		"instanceId":   instanceId,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -77,6 +92,6 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 		log.Printf("Error while reading response body: %v", err)
 
 	}
-	log.Default().Printf("Response from external service: %v", string(body))
+	log.Default().Println("Response from external service: %v", string(body))
 	return nil
 }
