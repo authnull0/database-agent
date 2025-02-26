@@ -85,7 +85,7 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 	}
 	// Connect to the database
 	log.Default().Printf("Trying to connect to database..")
-	db, err := pkg.ConnectToDB(config, dbUserName, dbPassword, dbHost)
+	db, err := pkg.ConnectToDB(config)
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %v", err)
 		fmt.Printf("Failed to connect to DB: %v", err)

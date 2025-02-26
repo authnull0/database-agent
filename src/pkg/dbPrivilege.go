@@ -11,10 +11,11 @@ import (
 )
 
 // FetchUserPrivileges fetches the privileges for users at the database level
-func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig) error {
+func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId string) error {
 	var query string
 	orgID, _ := strconv.Atoi(config.OrgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
+	//instanceID, _ := strconv.Atoi(instanceId)
 
 	query = `
 			SELECT 
@@ -59,6 +60,7 @@ GROUP BY
 			"host":         host,
 			"role":         role,
 			"privilege":    privileges,
+			"instanceId":   instanceId,
 		}
 
 		userPayloadBytes, err := json.Marshal(userPayload)
