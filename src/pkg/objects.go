@@ -11,6 +11,7 @@ type DBConfig struct {
 	User         string `mapstructure:"DB_USER"`
 	Password     string `mapstructure:"DB_PASSWORD"`
 	Key          string `mapstructure:"KEY"`
+	MachineKey   string `mapstructure:"MACHINE_KEY"`
 }
 
 type InstanceCreatedResponse struct {

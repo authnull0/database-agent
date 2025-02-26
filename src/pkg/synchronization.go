@@ -71,8 +71,25 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 
 		databases = append(databases, dbName)
 
+		// Register the database agent
+		instanceId := RegisterAgent(db, dbName, config)
+		log.Default().Printf("Instance Id: %v", instanceId)
+
+		if err != nil {
+			log.Printf("Failed to register agent for the database %s: %v", dbName, err)
+		}
+		log.Println("Regitser Agent Ended")
+
+		// Last Active Time Function call
+		err = LastActive(instanceId, db, dbName, config)
+
+		if err != nil {
+			log.Printf("Failed to get last active time of the database %s: %v", dbName, err)
+		}
+		log.Println("Last Active Time call  Ended")
+
 		// Fetch database status
-		err = FetchDatabaseStatus(db, dbName, config)
+		err = FetchDatabaseStatus(db, dbName, config, instanceId)
 
 		if err != nil {
 			log.Printf("Failed to fetch status for database %s: %v", dbName, err)
@@ -80,7 +97,7 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		log.Println("FetchDatabaseStatus Ended")
 
 		// Fetch tables and privileges for each database
-		err = FetchTablePrivileges(db, dbName, config)
+		err = FetchTablePrivileges(db, dbName, config, instanceId)
 		if err != nil {
 			log.Printf("Failed to fetch table privileges for database %s: %v", dbName, err)
 		}
