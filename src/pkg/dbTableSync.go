@@ -77,18 +77,17 @@ func FetchTables(db *sql.DB, dbName string, config DBConfig, instanceId string )
 
   client := &http.Client{}
   httpReq, err := http.NewRequest("POST", api, bytes.NewBuffer(payloadBytes))
-  httpReq.Header.Set("Content-Type", "application/json")
-  log.Println("Payload Sent: ")
-  log.Println(string(payloadBytes))
-
   if err != nil {
-    log.Printf("Error while sending table names: %v", err)
+    return err
   }
 
+  httpReq.Header.Set("Content-Type", "application/json")
   _, err = client.Do(httpReq)
   if err != nil {
     return err
   }
+  log.Println("Payload Sent: ")
+  log.Println(string(payloadBytes))
 
   return nil
 }
