@@ -26,7 +26,7 @@ type program struct {
 	dbUserName string
 	dbPassword string
 	dbHost     string
-	//apiKey     string
+	// apiKey     string
 }
 
 func (p *program) Start(s service.Service) error {
@@ -91,7 +91,7 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 		fmt.Printf("Failed to connect to DB: %v", err)
 		//      os.Exit(1)
 	}
-	//log.Default().Printf("Database connection establised successfully..")
+	// log.Default().Printf("Database connection establised successfully..")
 	defer db.Close()
 
 	// Ticker to run the synchronization every minute
@@ -116,12 +116,12 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 
 func main() {
 	// Command-line flags for user inputs
-	//dbPort := flag.String("port", "", "Database port")
+	// dbPort := flag.String("port", "", "Database port")
 	// dbHost := flag.String("host", "", "Database host")
 	// dbUserName := flag.String("username", "", "Database username")
 	// dbPassword := flag.String("password", "", "Database password")
-	//apiKey := flag.String("apikey", "", "API key")
-	//mode := flag.String("mode", "", "Mode of operation: install, start, stop, restart, uninstall, debug,service")
+	// apiKey := flag.String("apikey", "", "API key")
+	// mode := flag.String("mode", "", "Mode of operation: install, start, stop, restart, uninstall, debug,service")
 
 	// flag.Parse()
 
