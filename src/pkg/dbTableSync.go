@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -72,7 +73,7 @@ func FetchTables(db *sql.DB, dbName string, config DBConfig, instanceId string )
     log.Printf("Error while marshalling the payload: %v", err)
   }
 
-  api := config.API + "/api/v1/databaseService/dbTables"
+  api := config.API + "/api/v1/databaseService/dbTable"
   log.Printf("Sending table names to API %s", api)
 
   client := &http.Client{}
@@ -82,10 +83,12 @@ func FetchTables(db *sql.DB, dbName string, config DBConfig, instanceId string )
   }
 
   httpReq.Header.Set("Content-Type", "application/json")
-  _, err = client.Do(httpReq)
+  res, err := client.Do(httpReq)
   if err != nil {
     return err
   }
+  bodyBytes, err := io.ReadAll(res.Body)
+  log.Println(string(bodyBytes))
   log.Println("Payload Sent: ")
   log.Println(string(payloadBytes))
 
