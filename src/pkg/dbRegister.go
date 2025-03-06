@@ -14,7 +14,7 @@ import (
 	"github.com/authnull0/database-agent/utils"
 )
 
-// FetchDatabaseStatus fetches the status of a database
+// RegisterAgent registers the status of the machine
 func RegisterAgent(db *sql.DB, dbName string, config DBConfig) string {
 
 	orgID, _ := strconv.Atoi(config.OrgID)
@@ -38,9 +38,10 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) string {
 	payload := map[string]interface{}{
 		"orgId":        orgID,
 		"tenantId":     tenantID,
-		"os":           "Windows",
-		"status":       "Active",
+		"os":           2,
+		"status":       "ACTIVE",
 		"uuid":         config.Key,
+		"machineKey":   config.MachineKey,
 		"publicIp":     ipAddr,
 		"instanceName": instanceName,
 	}
@@ -92,7 +93,7 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) string {
 	fmt.Println("Printing Data Obj ", data)
 
 	instanceId := data.InstanceId
-	fmt.Println("Instance Id returned from register", instanceId)
+	fmt.Println("Instance Id returned from register:", instanceId)
 	// NB: instance ID is the machine_id of epm_machines table.
 	return instanceId
 
@@ -102,6 +103,7 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) string {
 
 // Function to call Last Active Time API
 func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig) error {
+	log.Default().Printf("Instance Id after last active api call: %v", instanceId)
 
 	orgID, _ := strconv.Atoi(config.OrgID)
 	log.Printf("Org Id: %d", orgID)
@@ -126,7 +128,7 @@ func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig) e
 
 	log.Default().Println("====================================")
 
-	apiURL := config.API + "/api/v1/databaseService/updatelastActive"
+	apiURL := config.API + "/api/v1/databaseService/updateLastActive"
 	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
 	log.Printf("Payload Sent: %s", string(payloadBytes))
 

@@ -15,13 +15,14 @@ import (
 )
 
 // FetchDatabaseStatus fetches the status of a database
-func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
+func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId string) error {
 	var query string
 
 	orgID, _ := strconv.Atoi(config.OrgID)
 	log.Printf("Org Id: %d", orgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
 	log.Printf("Tenant Id: %d", tenantID)
+	//	instanceID, _ := strconv.Atoi(instanceId)
 
 	query = "SHOW STATUS LIKE 'Uptime'"
 	// Execute query for database status
@@ -58,8 +59,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 		"host":         config.Host,
 		"status":       status,
 		"uuid":         config.Key,
-		"publicIp":     ipAddr,
-		"instanceName": instanceName,
+		"instanceId":   instanceId,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -70,7 +70,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig) error {
 
 	apiURL := config.API + "/api/v1/databaseService/dbSync"
 	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
-	log.Println("Payload Sent: %s", string(payloadBytes))
+	log.Printf("Payload Sent: %s", string(payloadBytes))
 
 	if err != nil {
 		log.Printf("Error while creating request: %v", err)
