@@ -102,6 +102,13 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 			log.Printf("Failed to fetch table privileges for database %s: %v", dbName, err)
 		}
 		log.Println("FetchDatabasePrivileges Ended")
+
+		// Fetch table and column names
+		err = FetchTables(db, dbName, config, instanceId)
+		if err != nil {
+			log.Printf("Failed to fetch tables and columns: %v", err)
+		}
+		log.Println("FetchTables Ended")
 	}
 
 	return nil
