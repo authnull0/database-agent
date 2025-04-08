@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -90,7 +90,7 @@ GROUP BY
 		}
 		defer httpResp.Body.Close()
 
-		userResponseBody, err := ioutil.ReadAll(httpResp.Body)
+		userResponseBody, err := io.ReadAll(httpResp.Body)
 		if err != nil {
 			log.Printf("Error while reading user response body: %v", err)
 			continue

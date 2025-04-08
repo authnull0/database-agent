@@ -1,20 +1,20 @@
 package utils
 
 import (
-	"io/ioutil"
+	"io"
 	"net/http"
 )
 
 func GetPublicIP() (string, error) {
 	resp, err := http.Get("https://api.ipify.org")
 	if err != nil {
-		return "", err
+		return "localhost", err
 	}
 	defer resp.Body.Close()
 
-	ip, err := ioutil.ReadAll(resp.Body)
+	ip, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "localhost", err
 	}
 
 	return string(ip), nil

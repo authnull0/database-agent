@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -56,7 +56,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 		"databaseType": config.DBType,
 		"databaseName": dbName,
 		"port":         config.Port,
-		"host":         config.Host,
+		"host":         ipAddr,
 		"status":       status,
 		"uuid":         config.Key,
 		"instanceId":   instanceId,
@@ -87,7 +87,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	}
 	defer httpResp.Body.Close()
 
-	body, err := ioutil.ReadAll(httpResp.Body)
+	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		log.Printf("Error while reading response body: %v", err)
 

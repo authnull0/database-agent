@@ -9,14 +9,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/authnull0/database-agent/src/pkg"
 	_ "github.com/denisenkom/go-mssqldb"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/kardianos/service"
 	_ "github.com/lib/pq"
 	_ "github.com/sijms/go-ora"
 	"github.com/spf13/viper"
-
-	"github.com/authnull0/database-agent/src/pkg"
 )
 
 var config pkg.DBConfig
