@@ -19,7 +19,7 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 
 	query = `
 	SELECT 
-		SUBSTRING_INDEX(p.grantee, '@', 1) AS username,
+    TRIM(BOTH '\'' FROM SUBSTRING_INDEX(p.grantee, '@', 1)) AS username,
 		SUBSTRING_INDEX(p.grantee, '@', -1) AS host,
 		GROUP_CONCAT(p.privilege_type ORDER BY p.privilege_type SEPARATOR ', ') AS privileges,
 		CASE 
@@ -31,19 +31,18 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 		END AS role
 	FROM 
 		information_schema.user_privileges p
-	WHERE 
-		SUBSTRING_INDEX(p.grantee, '@', 1) NOT IN (
-			'\'mysql.infoschema\'',
-			'\'mysql.session\'',
-			'\'mysql.sys\'',
-			'\'debian-sys-maint\'',
-			'\'mysqlxsys\'',
-			'\'mysqlbackup\'',
-			'\'replication\'',
-			'\'root\''
-		)
 	GROUP BY 
-		username, host;
+		username, host
+	HAVING 
+		username NOT IN (
+			'mysql.infoschema',
+			'mysql.session',
+			'mysql.sys',
+			'debian-sys-maint',
+			'mysqlxsys',
+			'mysqlbackup',
+			'replication'
+		);
 	`
 
 	// Execute query to get user privileges at the database level
