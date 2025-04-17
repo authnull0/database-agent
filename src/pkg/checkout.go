@@ -181,6 +181,18 @@ func GenerateCredentials(Config DBConfig, dbName string, dbUserName string, host
 		return false, err
 	}
 	log.Printf("Password for user %s updated successfully", dbUserName)
+
+	//COnnect to ProxysqlDB
+	proxySQLDB, err := ConnectToProxysqlDB(Config)
+	if err != nil {
+		log.Printf("Error while connecting to ProxySQL database: %v", err)
+	}
+
+	_, err = proxySQLDB.Exec(alterPasswdQuery)
+	if err != nil {
+		log.Printf("Error while updating password for user %s in ProxySQL: %v", dbUserName, err)
+		return false, err
+	}
 	orgId, _ := strconv.Atoi(Config.OrgID)
 	tenantId, _ := strconv.Atoi(Config.TenantID)
 	//Step3 : Call Create Database Credential API

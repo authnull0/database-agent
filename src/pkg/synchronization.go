@@ -20,6 +20,17 @@ func ConnectToDB(config DBConfig) (*sql.DB, error) {
 	return db, nil
 }
 
+func ConnectToProxysqlDB(config DBConfig) (*sql.DB, error) {
+	var dsn string
+	dsn = fmt.Sprintf("admin,test:%s@tcp(%s:%s)/", "admin", "127.0.0.1", "6032")
+
+	db, err := sql.Open(config.DBType, dsn)
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
 // checks if a given database is a system default database
 func isSystemDatabase(dbName, dbType string) bool {
 	systemDatabases := map[string][]string{
