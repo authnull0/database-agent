@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,7 +59,7 @@ type CreateDatabaseCredentialRequestDto struct {
 	Password       string              `json:"password"`
 }
 
-func PollCheckoutJob(dbName string, Config DBConfig) error {
+func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 	//API call to get all jobs from the queue
 	url := "https://prod.api.authnull.com/api/v1/databaseService/getJobQueue"
 	orgID, _ := strconv.Atoi(Config.OrgID)
@@ -112,7 +113,7 @@ func PollCheckoutJob(dbName string, Config DBConfig) error {
 	for _, job := range response.Data {
 		//Call Other Function to rotate the Password for the DB User in the Database
 
-		success, err := GenerateCredentials(Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privilege)
+		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privilege)
 		if err != nil {
 			log.Printf("Error while generating credentials: %v", err)
 			continue
@@ -158,7 +159,7 @@ func PollCheckoutJob(dbName string, Config DBConfig) error {
 	return nil
 
 }
-func GenerateCredentials(Config DBConfig, dbName string, dbUserName string, host string, WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string) (bool, error) {
+func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string, WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string) (bool, error) {
 	//Rotate the Credentials for the DB User in the Database
 	//Step1 : Generate a Random Password for the DB User
 	password, err := GenerateRandomPassword(16)
@@ -166,13 +167,6 @@ func GenerateCredentials(Config DBConfig, dbName string, dbUserName string, host
 		log.Printf("Error while generating random password: %v", err)
 		return false, err
 	}
-	//Connect to the database
-	db, err := ConnectToDB(Config)
-	if err != nil {
-		log.Printf("Error while connecting to database: %v", err)
-		return false, err
-	}
-
 	//Step2 : Update the Password for the DB User in the Database
 	alterPasswdQuery := fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY '%s'", dbUserName, host, password)
 	_, err = db.Exec(alterPasswdQuery)
@@ -187,12 +181,36 @@ func GenerateCredentials(Config DBConfig, dbName string, dbUserName string, host
 	if err != nil {
 		log.Printf("Error while connecting to ProxySQL database: %v", err)
 	}
+	//Create the user in ProxySQL
+	// Check if the user already exists in ProxySQL
+	checkUserQuery := fmt.Sprintf("SELECT COUNT(*) FROM mysql_users WHERE username = '%s'", dbUserName)
+	var userCount int
+	err = proxySQLDB.QueryRow(checkUserQuery).Scan(&userCount)
+	if err != nil {
+		log.Printf("Error while checking existence of user %s in ProxySQL: %v", dbUserName, err)
+		return false, err
+	}
 
+	if userCount == 0 {
+		// Create the user if it does not exist
+		createUserQuery := fmt.Sprintf("INSERT INTO mysql_users (username, password, active, use_ssl) VALUES ('%s', '%s', 1, 0)", dbUserName, password)
+		_, err = proxySQLDB.Exec(createUserQuery)
+		if err != nil {
+			log.Printf("Error while creating user %s in ProxySQL: %v", dbUserName, err)
+			return false, err
+		}
+		log.Printf("User %s created successfully in ProxySQL", dbUserName)
+	} else {
+		log.Printf("User %s already exists in ProxySQL", dbUserName)
+	}
+
+	// Update the password for the user in ProxySQL
 	_, err = proxySQLDB.Exec(alterPasswdQuery)
 	if err != nil {
 		log.Printf("Error while updating password for user %s in ProxySQL: %v", dbUserName, err)
 		return false, err
 	}
+	log.Printf("Password for user %s updated successfully in ProxySQL", dbUserName)
 	orgId, _ := strconv.Atoi(Config.OrgID)
 	tenantId, _ := strconv.Atoi(Config.TenantID)
 	//Step3 : Call Create Database Credential API

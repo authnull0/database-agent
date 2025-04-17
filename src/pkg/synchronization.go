@@ -121,7 +121,7 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		}
 		log.Println("FetchTables Ended")
 
-		err = PollCheckoutJob(dbName, config)
+		err = PollCheckoutJob(db, dbName, config)
 		if err != nil {
 			log.Printf("Failed to poll checkout job: %v", err)
 		}
