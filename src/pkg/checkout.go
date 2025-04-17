@@ -39,7 +39,7 @@ type JobQueue struct {
 	CredentialID *int      `gorm:"column:credential_id"`
 	Table_Name   string    `gorm:"column:table_name"`
 	Fields       string    `gorm:"column:fields"`
-	Privilege    string    `gorm:"column:privilege"`
+	Privilege    string    `gorm:"column:privileges"`
 	UpdatedAt    time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
 	CreatedAt    time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
 }
