@@ -112,10 +112,12 @@ func PollCheckoutJob(dbName string, Config DBConfig) error {
 	for _, job := range response.Data {
 		//Call Other Function to rotate the Password for the DB User in the Database
 
-		if success, err := GenerateCredentials(Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privilege); err != nil {
+		success, err := GenerateCredentials(Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privilege)
+		if err != nil {
 			log.Printf("Error while generating credentials: %v", err)
 			continue
-		} else if success {
+		}
+		if success {
 			log.Printf("Credentials generated successfully for job: %s", job.JobName)
 			//Call Update Job API to update the job status to completed
 			updateJobURL := "https://dev.api.authnull.com/api/v1/databaseService/updateQueue"
