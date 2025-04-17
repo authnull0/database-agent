@@ -167,8 +167,12 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		log.Printf("Error while generating random password: %v", err)
 		return false, err
 	}
-	hostquery := fmt.Sprintf("SELECT host FROM mysql.user WHERE user = '%s'", dbUserName)
-	dbhost := hostquery
+	var dbhost string
+	err = db.QueryRow("SELECT host FROM mysql.user WHERE user = ? LIMIT 1", dbUserName).Scan(&dbhost)
+	if err != nil {
+		log.Printf("Error fetching host for user %s: %v", dbUserName, err)
+		return false, err
+	}
 	// Check if the user exists with the correct host
 	checkUserQuery1 := fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE user = '%s' AND host = '%s'", dbUserName, dbhost)
 	alterPasswdQuery := fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY '%s'", dbUserName, dbhost, password)
