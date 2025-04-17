@@ -168,7 +168,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		return false, err
 	}
 	//Step2 : Update the Password for the DB User in the Database
-	alterPasswdQuery := fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY '%s'", dbUserName, host, password)
+	alterPasswdQuery := fmt.Sprintf("ALTER USER '%s'@localhost IDENTIFIED BY '%s'", dbUserName, password)
 	_, err = db.Exec(alterPasswdQuery)
 	if err != nil {
 		log.Printf("Error while updating password for user %s: %v", dbUserName, err)
