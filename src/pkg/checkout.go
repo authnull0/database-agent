@@ -60,7 +60,7 @@ type CreateDatabaseCredentialRequestDto struct {
 
 func PollCheckoutJob(dbName string, Config DBConfig) error {
 	//API call to get all jobs from the queue
-	url := "https://dev.api.authnull.com/api/v1/databaseService/getJobQueue"
+	url := "https://prod.api.authnull.com/api/v1/databaseService/getJobQueue"
 	orgID, _ := strconv.Atoi(Config.OrgID)
 	tenantID, _ := strconv.Atoi(Config.TenantID)
 
@@ -120,7 +120,7 @@ func PollCheckoutJob(dbName string, Config DBConfig) error {
 		if success {
 			log.Printf("Credentials generated successfully for job: %s", job.JobName)
 			//Call Update Job API to update the job status to completed
-			updateJobURL := "https://dev.api.authnull.com/api/v1/databaseService/updateQueue"
+			updateJobURL := "https://prod.api.authnull.com/api/v1/databaseService/updateQueue"
 			updateJobPayload := map[string]interface{}{
 				"orgId":    orgID,
 				"tenantId": tenantID,
@@ -240,7 +240,7 @@ func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCre
 		return errors.New("failed to marshal request body: " + err.Error())
 	}
 	log.Default().Println("Successfully Marshalled Request Body")
-	url := "https://dev.api.authnull.com/api/v1/credential/createDatabaseCredential"
+	url := "https://prod.api.authnull.com/api/v1/credential/createDatabaseCredential"
 	log.Default().Println("URL", url)
 	//Create the request
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(databaseCredentialRequestBytes))
