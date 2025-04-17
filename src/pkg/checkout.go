@@ -176,6 +176,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	// Check if the user exists with the correct host
 	checkUserQuery1 := fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE user = '%s' AND host = '%s'", dbUserName, dbhost)
 	alterPasswdQuery := fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY '%s'", dbUserName, dbhost, password)
+	updatePasswordQuery := fmt.Sprintf("UPDATE mysql_users SET password = '%s' WHERE username = '%s'", password, dbUserName)
 	var userCount1 int
 	err = db.QueryRow(checkUserQuery1).Scan(&userCount1)
 	if err != nil {
@@ -230,7 +231,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 
 	// Update the password for the user in ProxySQL
-	_, err = proxySQLDB.Exec(alterPasswdQuery)
+	_, err = proxySQLDB.Exec(updatePasswordQuery)
 	if err != nil {
 		log.Printf("Error while updating password for user %s in ProxySQL: %v", dbUserName, err)
 		return false, err
