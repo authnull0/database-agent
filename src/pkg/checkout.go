@@ -167,14 +167,35 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		log.Printf("Error while generating random password: %v", err)
 		return false, err
 	}
-	//Step2 : Update the Password for the DB User in the Database
-	alterPasswdQuery := fmt.Sprintf("ALTER USER '%s'@localhost IDENTIFIED BY '%s'", dbUserName, password)
-	_, err = db.Exec(alterPasswdQuery)
+	hostquery := fmt.Sprintf("SELECT host FROM mysql.user WHERE user = '%s'", dbUserName)
+	dbhost := hostquery
+	// Check if the user exists with the correct host
+	checkUserQuery1 := fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE user = '%s' AND host = '%s'", dbUserName, dbhost)
+	alterPasswdQuery := fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY '%s'", dbUserName, dbhost, password)
+	var userCount1 int
+	err = db.QueryRow(checkUserQuery1).Scan(&userCount1)
 	if err != nil {
-		log.Printf("Error while updating password for user %s: %v", dbUserName, err)
+		log.Printf("Error checking user: %v", err)
 		return false, err
 	}
-	log.Printf("Password for user %s updated successfully", dbUserName)
+
+	if userCount1 == 0 {
+		// Create user with the correct host
+		createUserQuery := fmt.Sprintf("CREATE USER '%s'@'%s' IDENTIFIED BY '%s'", dbUserName, dbhost, password)
+		_, err = db.Exec(createUserQuery)
+		if err != nil {
+			log.Printf("Error creating user: %v", err)
+			return false, err
+		}
+	} else {
+		// Update password for the correct host
+		_, err = db.Exec(alterPasswdQuery)
+		if err != nil {
+			log.Printf("Error updating password: %v", err)
+			return false, err
+		}
+		log.Printf("Password updated successfully for user %s@%s", dbUserName, dbhost)
+	}
 
 	//COnnect to ProxysqlDB
 	proxySQLDB, err := ConnectToProxysqlDB(Config)
@@ -184,14 +205,14 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	//Create the user in ProxySQL
 	// Check if the user already exists in ProxySQL
 	checkUserQuery := fmt.Sprintf("SELECT COUNT(*) FROM mysql_users WHERE username = '%s'", dbUserName)
-	var userCount int
-	err = proxySQLDB.QueryRow(checkUserQuery).Scan(&userCount)
+	var userCount2 int
+	err = proxySQLDB.QueryRow(checkUserQuery).Scan(&userCount2)
 	if err != nil {
 		log.Printf("Error while checking existence of user %s in ProxySQL: %v", dbUserName, err)
 		return false, err
 	}
 
-	if userCount == 0 {
+	if userCount2 == 0 {
 		// Create the user if it does not exist
 		createUserQuery := fmt.Sprintf("INSERT INTO mysql_users (username, password, active, use_ssl) VALUES ('%s', '%s', 1, 0)", dbUserName, password)
 		_, err = proxySQLDB.Exec(createUserQuery)
