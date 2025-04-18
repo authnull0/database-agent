@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"time"
@@ -98,16 +100,24 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 
 	//Unmarshal the response
 	var response GetAllJobQueueResponse
-	err = json.NewDecoder(resp.Body).Decode(&response)
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("Error while decoding response: %v", err)
+		log.Printf("Error while reading response body: %v", err)
 		return err
+	}
+	err = json.Unmarshal(bodyBytes, &response)
+	if err != nil {
+		log.Printf("Error while unmarshalling response: %v", err)
 	}
 	if response.Code != "200" {
 		log.Printf("Error in response: %s", response.Message)
 		return fmt.Errorf("error in response: %s", response.Message)
 	}
 	log.Printf("Response: %s", response.Message)
+	if len(response.Data) == 0 {
+		log.Printf("No jobs found in the queue")
+		return nil
+	}
 
 	//Iterate through the jobs and process them
 	for _, job := range response.Data {
@@ -123,9 +133,9 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 			//Call Update Job API to update the job status to completed
 			updateJobURL := "https://prod.api.authnull.com/api/v1/databaseService/updateQueue"
 			updateJobPayload := map[string]interface{}{
-				"orgId":    orgID,
-				"tenantId": tenantID,
-				"jobId":    job.ID,
+				"org_id":    orgID,
+				"tenant_id": tenantID,
+				"job_id":    job.ID,
 			}
 			updateJobPayloadBytes, err := json.Marshal(updateJobPayload)
 			if err != nil {
@@ -270,8 +280,9 @@ func GenerateRandomPassword(length int) (string, error) {
 	// Generate a random password of the given length
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+[]{}|;:,.<>?"
 	b := make([]byte, length)
+	seededRand := rand.New(rand.NewSource(time.Now().UnixNano())) // Seed the random number generator
 	for i := range b {
-		b[i] = charset[i%len(charset)]
+		b[i] = charset[seededRand.Intn(len(charset))] // Select a random character from the charset
 	}
 	return string(b), nil
 }
