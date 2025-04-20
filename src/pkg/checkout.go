@@ -20,6 +20,7 @@ type GetAllJobQueueRequest struct {
 	OrgID    int    `json:"org_id"`
 	TenantID int    `json:"tenant_id"`
 	Host     string `json:"host"`
+	DbName   string `json:"db_name"`
 }
 type GetAllJobQueueResponse struct {
 	Code       string     `json:"code"`
@@ -77,6 +78,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 		OrgID:    orgID,
 		TenantID: tenantID,
 		Host:     ipAddr,
+		DbName:   dbName,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
