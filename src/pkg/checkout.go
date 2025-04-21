@@ -147,7 +147,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 		}
 		fmt.Println("Policy details:", policyDetails)
 
-		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privilege)
+		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privilege, job.PolicyID)
 		if err != nil {
 			log.Printf("Error while generating credentials: %v", err)
 			continue
