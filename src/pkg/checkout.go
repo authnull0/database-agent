@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/authnull0/database-agent/utils"
+	"github.com/google/uuid"
 )
 
 type GetAllJobQueueRequest struct {
@@ -29,6 +30,7 @@ type GetAllJobQueueResponse struct {
 	Data       []JobQueue `json:"data"`
 }
 type JobQueue struct {
+	PolicyID     uuid.UUID `gorm:"primaryKey;column:id"`
 	ID           int       `gorm:"primaryKey;column:id"`
 	JobName      string    `gorm:"column:job_name"`
 	Status       string    `gorm:"column:status"`
@@ -61,7 +63,24 @@ type CreateDatabaseCredentialRequestDto struct {
 	Password       string              `json:"password"`
 }
 
+type GetPolicyDetails struct {
+	OrgId    int       `json:"orgId"`
+	TenantId int       `json:"tenantId"`
+	PolicyID uuid.UUID `json:"policyId"`
+}
+
+type GetPolicyDetailsResponse struct {
+	Code         int                 `json:"code"`
+	Message      string              `json:"message"`
+	DatabaseName string              `json:"database_name"`
+	Tables       []string            `json:"tables"`
+	FieldMasking map[string][]string `json:"field_masking"`
+	User         string              `json:"user"`
+	Privilege    []string            `json:"privilege"`
+}
+
 func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
+
 	//API call to get all jobs from the queue
 	url := "https://prod.api.authnull.com/api/v1/databaseService/getJobQueue"
 	orgID, _ := strconv.Atoi(Config.OrgID)
@@ -118,10 +137,15 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 		log.Printf("No jobs found in the queue")
 		return nil
 	}
-
 	//Iterate through the jobs and process them
 	for _, job := range response.Data {
 		//Call Other Function to rotate the Password for the DB User in the Database
+		policyDetails, err := FetchPolicyDetails(orgID, tenantID, job.PolicyID)
+		if err != nil {
+			log.Printf("Error fetching policy details for job %s: %v", job.JobName, err)
+			continue
+		}
+		fmt.Println("Policy details:", policyDetails)
 
 		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privilege)
 		if err != nil {
@@ -169,7 +193,40 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 	return nil
 
 }
-func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string, WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string) (bool, error) {
+
+func FetchPolicyDetails(orgID int, tenantID int, policyID uuid.UUID) (*GetPolicyDetailsResponse, error) {
+	url := "https://prod.api.authnull.com/api/v1/policyService/getPolicyDetails"
+
+	// Prepare the payload
+	payload := GetPolicyDetails{
+		OrgId:    orgID,
+		TenantId: tenantID,
+		PolicyID: policyID,
+	}
+
+	payloadBytes, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var result GetPolicyDetailsResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	if result.Code != 200 {
+		return nil, fmt.Errorf("failed to fetch policy: %s", result.Message)
+	}
+
+	return &result, nil
+}
+
+func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string, WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string, policyID uuid.UUID) (bool, error) {
 	//Rotate the Credentials for the DB User in the Database
 	//Step1 : Generate a Random Password for the DB User
 	password, err := GenerateRandomPassword(16)
@@ -247,8 +304,20 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		return false, err
 	}
 	log.Printf("Password for user %s updated successfully in ProxySQL", dbUserName)
+
 	orgId, _ := strconv.Atoi(Config.OrgID)
 	tenantId, _ := strconv.Atoi(Config.TenantID)
+
+	policyDetails, err := FetchPolicyDetails(orgId, tenantId, policyID)
+	if err != nil {
+		log.Printf("Error while fetching policy details: %v", err)
+		return false, err
+	}
+
+	// Populate Tables, FieldMasking, and Privilege from the policy details
+	tables := policyDetails.Tables
+	fieldMasking := policyDetails.FieldMasking
+	privilege := policyDetails.Privilege
 	//Step3 : Call Create Database Credential API
 	//Create the request body
 	databaseCredentialRequest := CreateDatabaseCredentialRequestDto{
@@ -260,10 +329,10 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		CredentialType: "DATABASE",
 		DatabaseName:   dbName,
 		Password:       password,
-		Tables:         []string{TableName},
-		FieldMasking:   map[string][]string{TableName: {Fields}},
+		Tables:         tables,
+		FieldMasking:   fieldMasking,
 		DBUser:         dbUserName,
-		Privilege:      []string{Privlege},
+		Privilege:      privilege,
 	}
 	//Call the API
 	err = CallCreateDatabaseCredentialAPI(databaseCredentialRequest)
