@@ -21,6 +21,7 @@ type GetAllJobQueueRequest struct {
 	OrgID    int    `json:"org_id"`
 	TenantID int    `json:"tenant_id"`
 	Host     string `json:"host"`
+	DbName   string `json:"db_name"`
 }
 type GetAllJobQueueResponse struct {
 	Code       string     `json:"code"`
@@ -44,7 +45,7 @@ type JobQueue struct {
 	CredentialID *int      `gorm:"column:credential_id"`
 	Table_Name   string    `gorm:"column:table_name"`
 	Fields       string    `gorm:"column:fields"`
-	Privilege    string    `gorm:"column:privileges"`
+	Privileges   string    `gorm:"column:privileges"`
 	UpdatedAt    time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
 	CreatedAt    time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
 }
@@ -96,6 +97,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 		OrgID:    orgID,
 		TenantID: tenantID,
 		Host:     ipAddr,
+		DbName:   dbName,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -147,7 +149,9 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 		}
 		fmt.Println("Policy details:", policyDetails)
 
-		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privilege, job.PolicyID)
+		fmt.Println("Job Details :", job)
+
+		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privileges, job.PolicyID)
 		if err != nil {
 			log.Printf("Error while generating credentials: %v", err)
 			continue
