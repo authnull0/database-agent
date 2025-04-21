@@ -69,15 +69,39 @@ type GetPolicyDetails struct {
 	TenantId int       `json:"tenantId"`
 	PolicyID uuid.UUID `json:"policyId"`
 }
-
 type GetPolicyDetailsResponse struct {
 	Code         int                 `json:"code"`
 	Message      string              `json:"message"`
-	DatabaseName string              `json:"database_name"`
+	DatabaseName string              `json:"database_name"` // Consistent with CreateDatabaseCredentialRequestDto
 	Tables       []string            `json:"tables"`
 	FieldMasking map[string][]string `json:"field_masking"`
-	User         string              `json:"user"`
 	Privilege    []string            `json:"privilege"`
+}
+type PolicyAPIResponse struct {
+	IsValid    bool   `json:"isValid"`
+	Message    string `json:"message"`
+	Status     string `json:"status"`
+	Code       int    `json:"code"`
+	RequestID  string `json:"requestId"`
+	Credential struct {
+		Context           []string `json:"@context"`
+		CredentialSubject struct {
+			CredentialType string              `json:"credentialType"`
+			DatabaseName   string              `json:"databaseName"`
+			FieldMasking   map[string][]string `json:"fieldMasking"`
+			Host           string              `json:"host"`
+			ID             string              `json:"id"`
+			Password       string              `json:"password"`
+			Privilege      []string            `json:"privilege"`
+			Schema         string              `json:"schema"`
+			Tables         []string            `json:"tables"`
+			User           string              `json:"user"`
+		} `json:"credentialSubject"`
+		ExpirationDate string `json:"expirationDate"`
+		ID             string `json:"id"`
+		IssuanceDate   string `json:"issuanceDate"`
+		Issuer         string `json:"issuer"`
+	} `json:"credential"`
 }
 
 func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
@@ -147,11 +171,16 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 			log.Printf("Error fetching policy details for job %s: %v", job.JobName, err)
 			continue
 		}
+		log.Printf("Policy details retrieved - Tables: %v, FieldMasking: %v, Privileges: %v",
+			policyDetails.Tables, policyDetails.FieldMasking, policyDetails.Privilege)
+
 		fmt.Println("Policy details:", policyDetails)
 
 		fmt.Println("Job Details :", job)
 
-		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privileges, job.PolicyID)
+		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host,
+			job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privileges,
+			job.PolicyID, policyDetails)
 		if err != nil {
 			log.Printf("Error while generating credentials: %v", err)
 			continue
@@ -208,29 +237,77 @@ func FetchPolicyDetails(orgID int, tenantID int, policyID uuid.UUID) (*GetPolicy
 		PolicyID: policyID,
 	}
 
-	payloadBytes, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal policy request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to execute HTTP request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	var result GetPolicyDetailsResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
+	// Check HTTP status code
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API returned non-OK status: %d, body: %s", resp.StatusCode, string(bodyBytes))
 	}
-	if result.Code != 200 {
-		return nil, fmt.Errorf("failed to fetch policy: %s", result.Message)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	// Parse the full response
+	var apiResponse PolicyAPIResponse
+	if err := json.Unmarshal(body, &apiResponse); err != nil {
+		return nil, fmt.Errorf("failed to parse policy response: %w", err)
+	}
+
+	if !apiResponse.IsValid || apiResponse.Code != 200 {
+		return nil, fmt.Errorf("invalid policy response: %s (code: %d)", apiResponse.Message, apiResponse.Code)
+	}
+
+	if apiResponse.Credential.CredentialSubject.Tables == nil {
+		return nil, errors.New("policy response contains no tables data")
+	}
+
+	// Map to your existing response structure
+	result := GetPolicyDetailsResponse{
+		Code:         apiResponse.Code,
+		Message:      apiResponse.Message,
+		DatabaseName: apiResponse.Credential.CredentialSubject.DatabaseName,
+		Tables:       apiResponse.Credential.CredentialSubject.Tables,
+		FieldMasking: apiResponse.Credential.CredentialSubject.FieldMasking,
+		Privilege:    apiResponse.Credential.CredentialSubject.Privilege,
 	}
 
 	return &result, nil
 }
 
-func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string, WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string, policyID uuid.UUID) (bool, error) {
+func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string,
+	WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string,
+	policyID uuid.UUID, policyDetails *GetPolicyDetailsResponse) (bool, error) {
+
+	// Validate policy details
+	if policyDetails == nil {
+		return false, errors.New("policy details cannot be nil")
+	}
+
+	if len(policyDetails.Tables) == 0 {
+		return false, errors.New("no tables found in policy details")
+	}
+
+	if len(policyDetails.Privilege) == 0 {
+		return false, errors.New("no privileges found in policy details")
+	}
 	//Rotate the Credentials for the DB User in the Database
 	//Step1 : Generate a Random Password for the DB User
 	password, err := GenerateRandomPassword(16)
@@ -311,12 +388,6 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 
 	orgId, _ := strconv.Atoi(Config.OrgID)
 	tenantId, _ := strconv.Atoi(Config.TenantID)
-
-	policyDetails, err := FetchPolicyDetails(orgId, tenantId, policyID)
-	if err != nil {
-		log.Printf("Error while fetching policy details: %v", err)
-		return false, err
-	}
 
 	// Populate Tables, FieldMasking, and Privilege from the policy details
 	tables := policyDetails.Tables
