@@ -43,7 +43,7 @@ type JobQueue struct {
 	CredentialID *int      `gorm:"column:credential_id"`
 	Table_Name   string    `gorm:"column:table_name"`
 	Fields       string    `gorm:"column:fields"`
-	Privilege    string    `gorm:"column:privileges"`
+	Privileges   string    `gorm:"column:privileges"`
 	UpdatedAt    time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
 	CreatedAt    time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
 }
@@ -124,8 +124,8 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 	//Iterate through the jobs and process them
 	for _, job := range response.Data {
 		//Call Other Function to rotate the Password for the DB User in the Database
-
-		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privilege)
+		fmt.Println("Job Details :", job)
+		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host, job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privileges)
 		if err != nil {
 			log.Printf("Error while generating credentials: %v", err)
 			continue
