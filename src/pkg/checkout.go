@@ -361,6 +361,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		// Create the user if it does not exist
 		createUserQuery := fmt.Sprintf("INSERT INTO mysql_users (username, password, active, use_ssl) VALUES ('%s', '%s', 1, 0)", dbUserName, password)
 		_, err = proxySQLDB.Exec(createUserQuery)
+
 		if err != nil {
 			log.Printf("Error while creating user %s in ProxySQL: %v", dbUserName, err)
 			return false, err
@@ -377,6 +378,18 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		return false, err
 	}
 	log.Printf("Password for user %s updated successfully in ProxySQL", dbUserName)
+
+	_, err = proxySQLDB.Exec("LOAD MYSQL USERS TO RUNTIME;")
+	if err != nil {
+		log.Printf("Error loading users to runtime in ProxySQL: %v", err)
+		return false, err
+	}
+
+	_, err = proxySQLDB.Exec("SAVE MYSQL USERS TO DISK;")
+	if err != nil {
+		log.Printf("Error saving users to disk in ProxySQL: %v", err)
+		return false, err
+	}
 
 	orgId, _ := strconv.Atoi(Config.OrgID)
 	tenantId, _ := strconv.Atoi(Config.TenantID)
