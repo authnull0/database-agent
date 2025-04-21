@@ -70,39 +70,42 @@ type GetPolicyDetails struct {
 	PolicyID uuid.UUID `json:"policyId"`
 }
 type GetPolicyDetailsResponse struct {
-	Code         int                 `json:"code"`
-	Message      string              `json:"message"`
-	DatabaseName string              `json:"database_name"` // Consistent with CreateDatabaseCredentialRequestDto
+	Code    int        `json:"code"`
+	Status  string     `json:"status"`
+	Message string     `json:"message"`
+	Data    PolicyJSON `json:"data"`
+}
+
+type PolicyJSON struct {
+	PolicyName     string         `json:"policyName" binding:"required"`
+	PolicyType     string         `json:"policyType" binding:"required"`
+	Endpoints      Endpoints      `json:"endpoints,omitempty"`
+	Domain         Domain         `json:"domain,omitempty"`
+	AD             AD             `json:"ad,omitempty"`
+	ADGroupInfra   AdGroupPolicy  `json:"infra,omitempty"`
+	Networks       RadiusNetwork  `json:"networks,omitempty"`
+	Dit            Dit            `json:"dit,omitempty"`
+	ServiceAccount ServiceAccount `json:"serviceaccount,omitempty"`
+	Database       Database       `json:"database,omitempty"`
+	Permissions    Permission     `json:"permissions"`
+}
+
+type Database struct {
+	DatabaseName string              `json:"database_name"`
 	Tables       []string            `json:"tables"`
 	FieldMasking map[string][]string `json:"field_masking"`
+	User         string              `json:"user"`
 	Privilege    []string            `json:"privilege"`
 }
-type PolicyAPIResponse struct {
-	IsValid    bool   `json:"isValid"`
-	Message    string `json:"message"`
-	Status     string `json:"status"`
-	Code       int    `json:"code"`
-	RequestID  string `json:"requestId"`
-	Credential struct {
-		Context           []string `json:"@context"`
-		CredentialSubject struct {
-			CredentialType string              `json:"credentialType"`
-			DatabaseName   string              `json:"databaseName"`
-			FieldMasking   map[string][]string `json:"fieldMasking"`
-			Host           string              `json:"host"`
-			ID             string              `json:"id"`
-			Password       string              `json:"password"`
-			Privilege      []string            `json:"privilege"`
-			Schema         string              `json:"schema"`
-			Tables         []string            `json:"tables"`
-			User           string              `json:"user"`
-		} `json:"credentialSubject"`
-		ExpirationDate string `json:"expirationDate"`
-		ID             string `json:"id"`
-		IssuanceDate   string `json:"issuanceDate"`
-		Issuer         string `json:"issuer"`
-	} `json:"credential"`
-}
+
+type Endpoints struct{}      // Placeholder for missing struct
+type Domain struct{}         // Placeholder for missing struct
+type AD struct{}             // Placeholder for missing struct
+type AdGroupPolicy struct{}  // Placeholder for missing struct
+type RadiusNetwork struct{}  // Placeholder for missing struct
+type Dit struct{}            // Placeholder for missing struct
+type ServiceAccount struct{} // Placeholder for missing struct
+type Permission struct{}     // Placeholder for missing struct
 
 func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 
@@ -172,7 +175,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 			continue
 		}
 		log.Printf("Policy details retrieved - Tables: %v, FieldMasking: %v, Privileges: %v",
-			policyDetails.Tables, policyDetails.FieldMasking, policyDetails.Privilege)
+			policyDetails.Data.Database.Tables, policyDetails.Data.Database.FieldMasking, policyDetails.Data.Database.Privilege)
 
 		fmt.Println("Policy details:", policyDetails)
 
@@ -230,7 +233,6 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 func FetchPolicyDetails(orgID int, tenantID int, policyID uuid.UUID) (*GetPolicyDetailsResponse, error) {
 	url := "https://prod.api.authnull.com/api/v1/policyService/getPolicyDetails"
 
-	// Prepare the payload
 	payload := GetPolicyDetails{
 		OrgId:    orgID,
 		TenantId: tenantID,
@@ -265,31 +267,21 @@ func FetchPolicyDetails(orgID int, tenantID int, policyID uuid.UUID) (*GetPolicy
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// Parse the full response
-	var apiResponse PolicyAPIResponse
+	// Parse the response
+	var apiResponse GetPolicyDetailsResponse
 	if err := json.Unmarshal(body, &apiResponse); err != nil {
 		return nil, fmt.Errorf("failed to parse policy response: %w", err)
 	}
 
-	if !apiResponse.IsValid || apiResponse.Code != 200 {
+	if apiResponse.Code != 200 {
 		return nil, fmt.Errorf("invalid policy response: %s (code: %d)", apiResponse.Message, apiResponse.Code)
 	}
 
-	if apiResponse.Credential.CredentialSubject.Tables == nil {
+	if apiResponse.Data.Database.Tables == nil {
 		return nil, errors.New("policy response contains no tables data")
 	}
 
-	// Map to your existing response structure
-	result := GetPolicyDetailsResponse{
-		Code:         apiResponse.Code,
-		Message:      apiResponse.Message,
-		DatabaseName: apiResponse.Credential.CredentialSubject.DatabaseName,
-		Tables:       apiResponse.Credential.CredentialSubject.Tables,
-		FieldMasking: apiResponse.Credential.CredentialSubject.FieldMasking,
-		Privilege:    apiResponse.Credential.CredentialSubject.Privilege,
-	}
-
-	return &result, nil
+	return &apiResponse, nil
 }
 
 func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string,
@@ -301,11 +293,11 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		return false, errors.New("policy details cannot be nil")
 	}
 
-	if len(policyDetails.Tables) == 0 {
+	if len(policyDetails.Data.Database.Tables) == 0 {
 		return false, errors.New("no tables found in policy details")
 	}
 
-	if len(policyDetails.Privilege) == 0 {
+	if len(policyDetails.Data.Database.Privilege) == 0 {
 		return false, errors.New("no privileges found in policy details")
 	}
 	//Rotate the Credentials for the DB User in the Database
@@ -389,10 +381,9 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	orgId, _ := strconv.Atoi(Config.OrgID)
 	tenantId, _ := strconv.Atoi(Config.TenantID)
 
-	// Populate Tables, FieldMasking, and Privilege from the policy details
-	tables := policyDetails.Tables
-	fieldMasking := policyDetails.FieldMasking
-	privilege := policyDetails.Privilege
+	tables := policyDetails.Data.Database.Tables
+	fieldMasking := policyDetails.Data.Database.FieldMasking
+	privilege := policyDetails.Data.Database.Privilege
 	//Step3 : Call Create Database Credential API
 	//Create the request body
 	databaseCredentialRequest := CreateDatabaseCredentialRequestDto{
