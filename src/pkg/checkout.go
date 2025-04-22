@@ -431,7 +431,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 
 	// Step 3: Encrypt the password before sending it to the API
 	// You need to define this AES key somewhere secure in your application
-	encryptionKey := []byte("Y9hL+r28l2+pXHYObVwhpdLb+ds8YLZGGyKfkARyaAb/9pAYIX5pigboLwxUBrLk") // This should be 16, 24, or 32 bytes for AES-128, AES-192, or AES-256
+	encryptionKey := []byte("84sF#v7Fpt!L#PesYb^AezXrUn2kE%5v") // This should be 16, 24, or 32 bytes for AES-128, AES-192, or AES-256
 
 	encryptedPassword, err := EncryptAES(password, encryptionKey)
 	if err != nil {
