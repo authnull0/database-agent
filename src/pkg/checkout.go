@@ -2,12 +2,17 @@ package pkg
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	cryptoRand "crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -284,6 +289,32 @@ func FetchPolicyDetails(orgID int, tenantID int, policyID uuid.UUID) (*GetPolicy
 	return &apiResponse, nil
 }
 
+// New function to encrypt a string using AES
+func EncryptAES(plaintext string, key []byte) (string, error) {
+	// Create a new AES cipher block
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	// Create a byte array with the plaintext
+	plaintextBytes := []byte(plaintext)
+
+	// The IV needs to be unique, but not secure
+	ciphertext := make([]byte, aes.BlockSize+len(plaintextBytes))
+	iv := ciphertext[:aes.BlockSize]
+	if _, err := io.ReadFull(cryptoRand.Reader, iv); err != nil {
+		return "", err
+	}
+
+	// Use CFB mode for encryption
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintextBytes)
+
+	// Return the encrypted bytes as a hex string
+	return hex.EncodeToString(ciphertext), nil
+}
+
 func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string,
 	WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string, DbUserID int,
 	policyID uuid.UUID, credentialID int, policyDetails *GetPolicyDetailsResponse) (bool, error) {
@@ -397,8 +428,18 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	tables := policyDetails.Data.Database.Tables
 	fieldMasking := policyDetails.Data.Database.FieldMasking
 	privilege := policyDetails.Data.Database.Privilege
-	//Step3 : Call Create Database Credential API
-	//Create the request body
+
+	// Step 3: Encrypt the password before sending it to the API
+	// You need to define this AES key somewhere secure in your application
+	encryptionKey := []byte("84sF#v7Fpt!L#PesYb^AezXrUn2kE%5v") // This should be 16, 24, or 32 bytes for AES-128, AES-192, or AES-256
+
+	encryptedPassword, err := EncryptAES(password, encryptionKey)
+	if err != nil {
+		log.Printf("Error encrypting password: %v", err)
+		return false, err
+	}
+
+	//Create the request body with encrypted password
 	databaseCredentialRequest := CreateDatabaseCredentialRequestDto{
 		OrgId:          orgId,
 		TenantId:       tenantId,
@@ -407,12 +448,13 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		Host:           host,
 		CredentialType: "DATABASE",
 		DatabaseName:   dbName,
-		Password:       password,
+		Password:       encryptedPassword,
 		Tables:         tables,
 		FieldMasking:   fieldMasking,
 		DBUser:         dbUserName,
 		Privilege:      privilege,
 	}
+
 	//Call the API
 	err = CallCreateDatabaseCredentialAPI(databaseCredentialRequest)
 	if err != nil {
@@ -427,8 +469,8 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 	//Step 4 : Return True if the password is updated successfully
 	return true, nil
-
 }
+
 func GenerateRandomPassword(length int) (string, error) {
 	// Generate a random password of the given length
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+[]{}|;:,.<>?"
