@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/authnull0/database-agent/utils"
+	"github.com/google/uuid"
 )
 
 type GetAllJobQueueRequest struct {
@@ -45,6 +46,7 @@ type JobQueue struct {
 	Privilege    string    `gorm:"column:privileges"`
 	UpdatedAt    time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
 	CreatedAt    time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
+	
 }
 type CreateDatabaseCredentialRequestDto struct {
 	OrgId          int                 `json:"orgId"`
@@ -169,7 +171,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 	return nil
 
 }
-func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string, WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string) (bool, error) {
+func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string, WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string, PolicyId uuid.UUID, DbUSerId int) (bool, error) {
 	//Rotate the Credentials for the DB User in the Database
 	//Step1 : Generate a Random Password for the DB User
 	password, err := GenerateRandomPassword(16)
@@ -249,6 +251,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	log.Printf("Password for user %s updated successfully in ProxySQL", dbUserName)
 	orgId, _ := strconv.Atoi(Config.OrgID)
 	tenantId, _ := strconv.Atoi(Config.TenantID)
+
 	//Step3 : Call Create Database Credential API
 	//Create the request body
 	databaseCredentialRequest := CreateDatabaseCredentialRequestDto{
@@ -271,7 +274,8 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		log.Printf("Error while calling Create Database Credential API: %v", err)
 		return false, err
 	}
-
+	//call policy credential mapping
+	err = CallPolicyCredentialMapping(orgId, PolicyId, tenantId, dbuser)
 	//Step 4 : Return True if the password is updated successfully
 	return true, nil
 
@@ -313,6 +317,48 @@ func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCre
 	defer resp.Body.Close()
 	log.Default().Println("response Status:", resp.Status)
 	log.Default().Println("response :", resp)
+
+	return nil
+}
+
+type CreateDatabaseCredentialResponseDto struct {
+	Status       string `json:"status"`
+	Message      string `json:"message"`
+	Code         int    `json:"code"`
+	CredentialId int    `json:"credentialId"`
+}
+
+//func call to call policy credential mapping from policy-service
+//payload will be the orgid,tenantid,policyid and credential id
+
+func CallPolicyCredentialMapping(orgId int, policyId uuid.UUID, tenantId int, dbUserId int, credentialId int) error {
+	payload := struct {
+		OrgId        int       `json:"org_id"`
+		TenantId     int       `json:"tenant_id"`
+		PolicyId     uuid.UUID `json:"policy_id"`
+		CredentialId int       `json:"credential_id"`
+		DbUserId     int       `json:"dbuser_id"`
+	}{
+		OrgId:        orgId,
+		TenantId:     tenantId,
+		PolicyId:     policyId,
+		CredentialId: credentialId,
+		DbUserId:     dbUserId,
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return errors.New("failed to marshal: " + err.Error())
+	}
+	url := "https://prod.api.authnull.com/api/v1/policyService/updatePolicyCredentialMapping"
+	log.Default().Println("URL", url)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return errors.New("failed to create request: " + err.Error())
+	}
+	log.Default().Println("Successfully Created Request")
+	req.Header.Set("Content-Type", "application/json")
+	log.Default().Println("Successfully Set Header", req)
 
 	return nil
 }
