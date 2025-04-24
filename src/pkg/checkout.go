@@ -22,6 +22,13 @@ import (
 	"github.com/google/uuid"
 )
 
+type CreateDatabaseCredentialResponseDto struct {
+	Status       string `json:"status"`
+	Message      string `json:"message"`
+	Code         int    `json:"code"`
+	CredentialId int    `json:"credentialId"`
+}
+
 type GetAllJobQueueRequest struct {
 	OrgID    int    `json:"org_id"`
 	TenantID int    `json:"tenant_id"`
@@ -456,7 +463,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 
 	//Call the API
-	err = CallCreateDatabaseCredentialAPI(databaseCredentialRequest)
+	credentialID, err = CallCreateDatabaseCredentialAPI(databaseCredentialRequest)
 	if err != nil {
 		log.Printf("Error while calling Create Database Credential API: %v", err)
 		return false, err
@@ -481,13 +488,13 @@ func GenerateRandomPassword(length int) (string, error) {
 	}
 	return string(b), nil
 }
-func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCredentialRequestDto) error {
+func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCredentialRequestDto) (int, error) {
 	log.Default().Println("Entered CallCreateDatabaseCredentialAPI")
 	client := &http.Client{}
 	//Marshal the request body
 	databaseCredentialRequestBytes, err := json.Marshal(databaseCredentialRequest)
 	if err != nil {
-		return errors.New("failed to marshal request body: " + err.Error())
+		return 0, errors.New("failed to marshal request body: " + err.Error())
 	}
 	log.Default().Println("Successfully Marshalled Request Body")
 	url := "https://prod.api.authnull.com/api/v1/credential/createDatabaseCredential"
@@ -495,7 +502,7 @@ func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCre
 	//Create the request
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(databaseCredentialRequestBytes))
 	if err != nil {
-		return errors.New("failed to create request: " + err.Error())
+		return 0, errors.New("failed to create request: " + err.Error())
 	}
 	log.Default().Println("Successfully Created Request")
 	req.Header.Set("Content-Type", "application/json")
@@ -503,20 +510,19 @@ func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCre
 	//Execute the request
 	resp, err := client.Do(req)
 	if err != nil {
-		return errors.New("failed to execute request: " + err.Error())
+		return 0, errors.New("failed to execute request: " + err.Error())
 	}
 	defer resp.Body.Close()
 	log.Default().Println("response Status:", resp.Status)
 	log.Default().Println("response :", resp)
+	var response CreateDatabaseCredentialResponseDto
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return 0, errors.New("failed to decode response: " + err.Error())
+	}
 
-	return nil
-}
+	log.Default().Println("Successfully received credential ID:", response.CredentialId)
 
-type CreateDatabaseCredentialResponseDto struct {
-	Status       string `json:"status"`
-	Message      string `json:"message"`
-	Code         int    `json:"code"`
-	CredentialId int    `json:"credentialId"`
+	return response.CredentialId, nil
 }
 
 //func call to call policy credential mapping from policy-service
