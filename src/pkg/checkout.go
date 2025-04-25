@@ -195,7 +195,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 
 		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host,
 			job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privileges, job.DbUserID,
-			job.PolicyID, *job.CredentialID, policyDetails)
+			job.PolicyID, policyDetails)
 		if err != nil {
 			log.Printf("Error while generating credentials: %v", err)
 			continue
@@ -324,7 +324,7 @@ func EncryptAES(plaintext string, key []byte) (string, error) {
 
 func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string,
 	WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string, DbUserID int,
-	policyID uuid.UUID, credentialID int, policyDetails *GetPolicyDetailsResponse) (bool, error) {
+	policyID uuid.UUID, policyDetails *GetPolicyDetailsResponse) (bool, error) {
 
 	// Validate policy details
 	if policyDetails == nil {
@@ -463,11 +463,12 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 
 	//Call the API
-	credentialID, err = CallCreateDatabaseCredentialAPI(databaseCredentialRequest)
+	credentialID, err := CallCreateDatabaseCredentialAPI(databaseCredentialRequest)
 	if err != nil {
 		log.Printf("Error while calling Create Database Credential API: %v", err)
 		return false, err
 	}
+	log.Default().Println("The cred id is:", credentialID)
 	//call policy credential mapping
 	err = CallPolicyCredentialMapping(orgId, policyID, tenantId, DbUserID, credentialID)
 	if err != nil {
@@ -547,6 +548,7 @@ func CallPolicyCredentialMapping(orgId int, policyId uuid.UUID, tenantId int, db
 	if err != nil {
 		return errors.New("failed to marshal: " + err.Error())
 	}
+	log.Default().Println(string(jsonData))
 	url := "https://prod.api.authnull.com/api/v1/policyService/updatePolicyCredentialMapping"
 	log.Default().Println("URL", url)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
