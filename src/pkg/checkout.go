@@ -547,6 +547,7 @@ func CallPolicyCredentialMapping(orgId int, policyId uuid.UUID, tenantId int, cr
 		return errors.New("failed to marshal: " + err.Error())
 	}
 	log.Default().Println(string(jsonData))
+	client := &http.Client{}
 	url := "https://prod.api.authnull.com/api/v1/policyService/updatePolicyCredentialMapping"
 	log.Default().Println("URL", url)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
@@ -556,6 +557,12 @@ func CallPolicyCredentialMapping(orgId int, policyId uuid.UUID, tenantId int, cr
 	log.Default().Println("Successfully Created Request")
 	req.Header.Set("Content-Type", "application/json")
 	log.Default().Println("Successfully Set Header", req)
-
+	resp, err := client.Do(req)
+	if err != nil {
+		return errors.New("failed to execute request: " + err.Error())
+	}
+	defer resp.Body.Close()
+	log.Default().Println("response Status:", resp.Status)
+	log.Default().Println("response :", resp)
 	return nil
 }
