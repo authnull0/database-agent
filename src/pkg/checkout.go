@@ -470,7 +470,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 	log.Default().Println("The cred id is:", credentialID)
 	//call policy credential mapping
-	err = CallPolicyCredentialMapping(orgId, policyID, tenantId, DbUserID, credentialID)
+	err = CallPolicyCredentialMapping(orgId, policyID, tenantId, credentialID)
 	if err != nil {
 		log.Printf("Error while calling Update Policy Credential Mapping API: %v", err)
 		return false, err
@@ -529,19 +529,17 @@ func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCre
 //func call to call policy credential mapping from policy-service
 //payload will be the orgid,tenantid,policyid and credential id
 
-func CallPolicyCredentialMapping(orgId int, policyId uuid.UUID, tenantId int, dbUserId int, credentialId int) error {
+func CallPolicyCredentialMapping(orgId int, policyId uuid.UUID, tenantId int, credentialId int) error {
 	payload := struct {
 		OrgId        int       `json:"org_id"`
 		TenantId     int       `json:"tenant_id"`
 		PolicyId     uuid.UUID `json:"policy_id"`
 		CredentialId int       `json:"credential_id"`
-		DbUserId     int       `json:"dbuser_id"`
 	}{
 		OrgId:        orgId,
 		TenantId:     tenantId,
 		PolicyId:     policyId,
 		CredentialId: credentialId,
-		DbUserId:     dbUserId,
 	}
 
 	jsonData, err := json.Marshal(payload)
