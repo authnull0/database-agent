@@ -345,31 +345,45 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	//		log.Printf("Error while generating random password: %v", err)
 	//		return false, err
 	//	}
-
+	var password string
 	proxySQLDB, err := ConnectToProxysqlDB(Config)
 	if err != nil {
 		log.Printf("Error while connecting to ProxySQL database: %v", err)
 		return false, err
 	}
-
-	var existingPassword string
-	checkExistingPasswordQuery := fmt.Sprintf("SELECT password FROM mysql_users WHERE username = '%s'", dbUserName)
-	err = proxySQLDB.QueryRow(checkExistingPasswordQuery).Scan(&existingPassword)
-	if err != nil && err != sql.ErrNoRows {
-		log.Printf("Error checking existing password for user %s: %v", dbUserName, err)
+	// Before checking the password, first verify the user exists
+	var userExists int
+	checkUserExistsQuery := fmt.Sprintf("SELECT COUNT(*) FROM mysql_users WHERE username = '%s'", dbUserName)
+	err = proxySQLDB.QueryRow(checkUserExistsQuery).Scan(&userExists)
+	if err != nil {
+		log.Printf("Error checking if user exists in ProxySQL: %v", err)
 		return false, err
 	}
 
-	password := ""
-	if existingPassword != "" {
-		// Password already exists, use it
-		log.Printf("Existing password found for user %s, skipping password rotation", dbUserName)
-		password = existingPassword
+	if userExists > 0 {
+		// User exists, let's get the password
+		var existingPassword string
+		checkExistingPasswordQuery := fmt.Sprintf("SELECT password FROM mysql_users WHERE username = '%s'", dbUserName)
+		err = proxySQLDB.QueryRow(checkExistingPasswordQuery).Scan(&existingPassword)
+		if err != nil {
+			log.Printf("Error retrieving password for user %s: %v", dbUserName, err)
+			return false, err
+		}
+
+		if existingPassword != "" {
+			log.Printf("Existing password found for user %s, skipping password rotation", dbUserName)
+			password = existingPassword
+		} else {
+			log.Printf("User exists but has empty password, generating new one")
+			password, err = GenerateRandomPassword(16)
+			if err != nil {
+				return false, err
+			}
+		}
 	} else {
-		// Password doesn't exist, generate a new one
+		// User doesn't exist, generate new password
 		password, err = GenerateRandomPassword(16)
 		if err != nil {
-			log.Printf("Error while generating random password: %v", err)
 			return false, err
 		}
 	}
