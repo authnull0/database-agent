@@ -340,10 +340,52 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 	//Rotate the Credentials for the DB User in the Database
 	//Step1 : Generate a Random Password for the DB User
-	password, err := GenerateRandomPassword(16)
+	//password, err := GenerateRandomPassword(16)
+	//if err != nil {
+	//		log.Printf("Error while generating random password: %v", err)
+	//		return false, err
+	//	}
+	var password string
+	proxySQLDB, err := ConnectToProxysqlDB(Config)
 	if err != nil {
-		log.Printf("Error while generating random password: %v", err)
+		log.Printf("Error while connecting to ProxySQL database: %v", err)
 		return false, err
+	}
+	// Before checking the password, first verify the user exists
+	var userExists int
+	checkUserExistsQuery := fmt.Sprintf("SELECT COUNT(*) FROM mysql_users WHERE username = '%s'", dbUserName)
+	err = proxySQLDB.QueryRow(checkUserExistsQuery).Scan(&userExists)
+	if err != nil {
+		log.Printf("Error checking if user exists in ProxySQL: %v", err)
+		return false, err
+	}
+
+	if userExists > 0 {
+		// User exists, let's get the password
+		var existingPassword string
+		checkExistingPasswordQuery := fmt.Sprintf("SELECT password FROM mysql_users WHERE username = '%s'", dbUserName)
+		err = proxySQLDB.QueryRow(checkExistingPasswordQuery).Scan(&existingPassword)
+		if err != nil {
+			log.Printf("Error retrieving password for user %s: %v", dbUserName, err)
+			return false, err
+		}
+
+		if existingPassword != "" {
+			log.Printf("Existing password found for user %s, skipping password rotation", dbUserName)
+			password = existingPassword
+		} else {
+			log.Printf("User exists but has empty password, generating new one")
+			password, err = GenerateRandomPassword(16)
+			if err != nil {
+				return false, err
+			}
+		}
+	} else {
+		// User doesn't exist, generate new password
+		password, err = GenerateRandomPassword(16)
+		if err != nil {
+			return false, err
+		}
 	}
 	var dbhost string
 	err = db.QueryRow("SELECT host FROM mysql.user WHERE user = ? LIMIT 1", dbUserName).Scan(&dbhost)
@@ -381,10 +423,10 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 
 	//COnnect to ProxysqlDB
-	proxySQLDB, err := ConnectToProxysqlDB(Config)
-	if err != nil {
-		log.Printf("Error while connecting to ProxySQL database: %v", err)
-	}
+	//proxySQLDB, err := ConnectToProxysqlDB(Config)
+	//if err != nil {
+	//	log.Printf("Error while connecting to ProxySQL database: %v", err)
+	//}
 	//Create the user in ProxySQL
 	// Check if the user already exists in ProxySQL
 	checkUserQuery := fmt.Sprintf("SELECT COUNT(*) FROM mysql_users WHERE username = '%s'", dbUserName)
