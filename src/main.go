@@ -105,10 +105,6 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 			err = pkg.FetchDatabaseDetails(db, config)
 			if err != nil {
 				log.Printf("Failed to fetch database details: %v", err)
-			} else {
-				orgID, _ := strconv.Atoi(config.OrgID)
-				tenantID, _ := strconv.Atoi(config.TenantID)
-				go pkg.StartDBLogMonitor(orgID, tenantID)
 			}
 		case <-exit:
 			log.Println("Stopping agent...")
