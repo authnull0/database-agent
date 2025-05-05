@@ -22,3 +22,4 @@ type InstanceCreatedResponse struct {
 	// message
 	Message string
 }
+
