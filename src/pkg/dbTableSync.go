@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -21,9 +20,17 @@ func FetchTables(db *sql.DB, dbName string, config DBConfig, instanceId string) 
 	log.Printf("Fetching table names FROM...")
 	tables := make(map[string][]string)
 	log.Printf(dbName)
-	tableQuery := fmt.Sprintf("SHOW TABLES FROM `%s`", dbName)
+
+	// PostgreSQL query to list tables in a schema (public schema by default)
+	tableQuery := `
+		SELECT table_name 
+		FROM information_schema.tables 
+		WHERE table_schema = 'public' 
+		AND table_type = 'BASE TABLE' 
+		AND table_catalog = $1`
+
 	log.Println(tableQuery)
-	rows, err := db.Query(tableQuery)
+	rows, err := db.Query(tableQuery, dbName)
 
 	if err != nil {
 		return err
@@ -35,8 +42,17 @@ func FetchTables(db *sql.DB, dbName string, config DBConfig, instanceId string) 
 		if err := rows.Scan(&tableName); err != nil {
 			return err
 		}
-		columnsQuery := fmt.Sprintf("SHOW COLUMNS FROM `%s`.`%s`;", dbName, tableName)
-		columnRows, err := db.Query(columnsQuery)
+
+		// PostgreSQL query to list columns in a table
+		columnsQuery := `
+			SELECT column_name 
+			FROM information_schema.columns 
+			WHERE table_schema = 'public' 
+			AND table_name = $1
+			AND table_catalog = $2
+			ORDER BY ordinal_position`
+
+		columnRows, err := db.Query(columnsQuery, tableName, dbName)
 		if err != nil {
 			return err
 		}
@@ -45,14 +61,13 @@ func FetchTables(db *sql.DB, dbName string, config DBConfig, instanceId string) 
 		var columns []string
 
 		for columnRows.Next() {
-			var columnName sql.NullString
-			var columnType, isNull, key, defaultValue, extra sql.NullString
+			var columnName string
 
-			if err := columnRows.Scan(&columnName, &columnType, &isNull, &key, &defaultValue, &extra); err != nil {
+			if err := columnRows.Scan(&columnName); err != nil {
 				log.Println(err)
 				return err
 			}
-			columns = append(columns, columnName.String)
+			columns = append(columns, columnName)
 		}
 		tables[tableName] = columns
 	}
@@ -61,7 +76,7 @@ func FetchTables(db *sql.DB, dbName string, config DBConfig, instanceId string) 
 	payload := map[string]interface{}{
 		"orgId":        orgID,
 		"tenantId":     tenantID,
-		"databaseType": config.DBType,
+		"databaseType": "postgres",
 		"databaseName": dbName,
 		"tables":       tables,
 		"instanceId":   instanceId,

@@ -10,39 +10,44 @@ import (
 	"strconv"
 )
 
-// FetchUserPrivileges fetches the privileges for users at the database level
+// FetchTablePrivileges fetches the privileges for users at the database level for PostgreSQL
 func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId string) error {
 	var query string
 	orgID, _ := strconv.Atoi(config.OrgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
-	//instanceID, _ := strconv.Atoi(instanceId)
 
+	// PostgreSQL uses different system catalogs for privilege information
 	query = `
 	SELECT 
-    TRIM(BOTH '\'' FROM SUBSTRING_INDEX(p.grantee, '@', 1)) AS username,
-		SUBSTRING_INDEX(p.grantee, '@', -1) AS host,
-		GROUP_CONCAT(p.privilege_type ORDER BY p.privilege_type SEPARATOR ', ') AS privileges,
+		r.rolname AS username,
+		'localhost' AS host,  -- PostgreSQL doesn't have host concepts like MySQL
 		CASE 
-			WHEN FIND_IN_SET('SUPER', GROUP_CONCAT(p.privilege_type)) > 0 
-			  OR FIND_IN_SET('CREATE USER', GROUP_CONCAT(p.privilege_type)) > 0
-			  OR FIND_IN_SET('GRANT OPTION', GROUP_CONCAT(p.privilege_type)) > 0 
-			THEN 'Admin'
+			WHEN r.rolsuper THEN 'ALL PRIVILEGES'
+			ELSE string_agg(
+				CASE
+					WHEN has_database_privilege(r.rolname, current_database(), 'CREATE') THEN 'CREATE'
+					WHEN has_database_privilege(r.rolname, current_database(), 'CONNECT') THEN 'CONNECT'
+					WHEN has_database_privilege(r.rolname, current_database(), 'TEMPORARY') THEN 'TEMPORARY'
+					ELSE ''
+				END, ', '
+			)
+		END AS privileges,
+		CASE 
+			WHEN r.rolsuper THEN 'Admin'
+			WHEN r.rolcreaterole OR r.rolcreatedb THEN 'Admin'
 			ELSE 'User'
 		END AS role
 	FROM 
-		information_schema.user_privileges p
+		pg_roles r
+	WHERE 
+		r.rolname NOT IN ('postgres', 'pg_signal_backend', 'pg_read_all_settings', 
+						  'pg_read_all_stats', 'pg_stat_scan_tables', 'pg_monitor', 
+						  'pg_database_owner')
+		AND r.rolcanlogin = true
 	GROUP BY 
-		username, host
-	HAVING 
-		username NOT IN (
-			'mysql.infoschema',
-			'mysql.session',
-			'mysql.sys',
-			'debian-sys-maint',
-			'mysqlxsys',
-			'mysqlbackup',
-			'replication'
-		);
+		r.rolname, r.rolsuper, r.rolcreaterole, r.rolcreatedb
+	ORDER BY 
+		r.rolname;
 	`
 
 	// Execute query to get user privileges at the database level
@@ -58,7 +63,7 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 			return err
 		}
 
-		log.Printf("Database Name: %s, User: %s, Host: %s, Privileges: %s ,Role: %s", dbName, username, host, privileges, role)
+		log.Printf("Database Name: %s, User: %s, Host: %s, Privileges: %s, Role: %s", dbName, username, host, privileges, role)
 
 		// Send the username to the dbUser API
 		userPayload := map[string]interface{}{
@@ -106,7 +111,6 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 			continue
 		}
 		log.Printf("Response from dbUser API: %v", string(userResponseBody))
-
 	}
 
 	return nil

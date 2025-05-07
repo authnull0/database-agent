@@ -338,22 +338,17 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	if len(policyDetails.Data.Database.Privilege) == 0 {
 		return false, errors.New("no privileges found in policy details")
 	}
-	//Rotate the Credentials for the DB User in the Database
-	//Step1 : Generate a Random Password for the DB User
-	//password, err := GenerateRandomPassword(16)
-	//if err != nil {
-	//		log.Printf("Error while generating random password: %v", err)
-	//		return false, err
-	//	}
+
 	var password string
 	proxySQLDB, err := ConnectToProxysqlDB(Config)
 	if err != nil {
 		log.Printf("Error while connecting to ProxySQL database: %v", err)
 		return false, err
 	}
+
 	// Before checking the password, first verify the user exists
 	var userExists int
-	checkUserExistsQuery := fmt.Sprintf("SELECT COUNT(*) FROM mysql_users WHERE username = '%s'", dbUserName)
+	checkUserExistsQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_users WHERE username = '%s'", dbUserName)
 	err = proxySQLDB.QueryRow(checkUserExistsQuery).Scan(&userExists)
 	if err != nil {
 		log.Printf("Error checking if user exists in ProxySQL: %v", err)
@@ -363,7 +358,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	if userExists > 0 {
 		// User exists, let's get the password
 		var existingPassword string
-		checkExistingPasswordQuery := fmt.Sprintf("SELECT password FROM mysql_users WHERE username = '%s'", dbUserName)
+		checkExistingPasswordQuery := fmt.Sprintf("SELECT password FROM pgsql_users WHERE username = '%s'", dbUserName)
 		err = proxySQLDB.QueryRow(checkExistingPasswordQuery).Scan(&existingPassword)
 		if err != nil {
 			log.Printf("Error retrieving password for user %s: %v", dbUserName, err)
@@ -387,16 +382,26 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 			return false, err
 		}
 	}
+
+	// PostgreSQL conversion: Check if user exists
 	var dbhost string
-	err = db.QueryRow("SELECT host FROM mysql.user WHERE user = ? LIMIT 1", dbUserName).Scan(&dbhost)
+	// In PostgreSQL, we don't need host info for the user, just check if role exists
+	err = db.QueryRow("SELECT rolname FROM pg_roles WHERE rolname = $1 LIMIT 1", dbUserName).Scan(&dbhost)
 	if err != nil {
-		log.Printf("Error fetching host for user %s: %v", dbUserName, err)
-		return false, err
+		if err == sql.ErrNoRows {
+			log.Printf("User %s doesn't exist in PostgreSQL", dbUserName)
+			dbhost = "" // Not used in PostgreSQL but keeping the variable
+		} else {
+			log.Printf("Error fetching user info for %s: %v", dbUserName, err)
+			return false, err
+		}
 	}
-	// Check if the user exists with the correct host
-	checkUserQuery1 := fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE user = '%s' AND host = '%s'", dbUserName, dbhost)
-	alterPasswdQuery := fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY '%s'", dbUserName, dbhost, password)
-	updatePasswordQuery := fmt.Sprintf("UPDATE mysql_users SET password = '%s' WHERE username = '%s'", password, dbUserName)
+
+	// Check if the user exists
+	checkUserQuery1 := fmt.Sprintf("SELECT COUNT(*) FROM pg_roles WHERE rolname = '%s'", dbUserName)
+	alterPasswdQuery := fmt.Sprintf("ALTER ROLE %s WITH PASSWORD '%s'", dbUserName, password)
+	updatePasswordQuery := fmt.Sprintf("UPDATE pgsql_users SET password = '%s' WHERE username = '%s'", password, dbUserName)
+
 	var userCount1 int
 	err = db.QueryRow(checkUserQuery1).Scan(&userCount1)
 	if err != nil {
@@ -405,31 +410,25 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 
 	if userCount1 == 0 {
-		// Create user with the correct host
-		createUserQuery := fmt.Sprintf("CREATE USER '%s'@'%s' IDENTIFIED BY '%s'", dbUserName, dbhost, password)
+		// Create role in PostgreSQL
+		createUserQuery := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD '%s'", dbUserName, password)
 		_, err = db.Exec(createUserQuery)
 		if err != nil {
 			log.Printf("Error creating user: %v", err)
 			return false, err
 		}
 	} else {
-		// Update password for the correct host
+		// Update password for the role
 		_, err = db.Exec(alterPasswdQuery)
 		if err != nil {
 			log.Printf("Error updating password: %v", err)
 			return false, err
 		}
-		log.Printf("Password updated successfully for user %s@%s", dbUserName, dbhost)
+		log.Printf("Password updated successfully for user %s", dbUserName)
 	}
 
-	//COnnect to ProxysqlDB
-	//proxySQLDB, err := ConnectToProxysqlDB(Config)
-	//if err != nil {
-	//	log.Printf("Error while connecting to ProxySQL database: %v", err)
-	//}
-	//Create the user in ProxySQL
 	// Check if the user already exists in ProxySQL
-	checkUserQuery := fmt.Sprintf("SELECT COUNT(*) FROM mysql_users WHERE username = '%s'", dbUserName)
+	checkUserQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_users WHERE username = '%s'", dbUserName)
 	var userCount2 int
 	err = proxySQLDB.QueryRow(checkUserQuery).Scan(&userCount2)
 	if err != nil {
@@ -439,7 +438,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 
 	if userCount2 == 0 {
 		// Create the user if it does not exist
-		createUserQuery := fmt.Sprintf("INSERT INTO mysql_users (username, password, active, use_ssl) VALUES ('%s', '%s', 1, 0)", dbUserName, password)
+		createUserQuery := fmt.Sprintf("INSERT INTO pgsql_users (username, password, active, use_ssl) VALUES ('%s', '%s', 1, 0)", dbUserName, password)
 		_, err = proxySQLDB.Exec(createUserQuery)
 
 		if err != nil {
@@ -459,18 +458,19 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 	log.Printf("Password for user %s updated successfully in ProxySQL", dbUserName)
 
-	_, err = proxySQLDB.Exec("LOAD MYSQL USERS TO RUNTIME;")
+	_, err = proxySQLDB.Exec("LOAD PGSQL USERS TO RUNTIME;")
 	if err != nil {
 		log.Printf("Error loading users to runtime in ProxySQL: %v", err)
 		return false, err
 	}
 
-	_, err = proxySQLDB.Exec("SAVE MYSQL USERS TO DISK;")
+	_, err = proxySQLDB.Exec("SAVE PGSQL USERS TO DISK;")
 	if err != nil {
 		log.Printf("Error saving users to disk in ProxySQL: %v", err)
 		return false, err
 	}
 
+	// [Rest of the function remains unchanged]
 	orgId, _ := strconv.Atoi(Config.OrgID)
 	tenantId, _ := strconv.Atoi(Config.TenantID)
 
@@ -479,8 +479,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	privilege := policyDetails.Data.Database.Privilege
 
 	// Step 3: Encrypt the password before sending it to the API
-	// You need to define this AES key somewhere secure in your application
-	encryptionKey := []byte("84sF#v7Fpt!L#PesYb^AezXrUn2kE%5v") // This should be 16, 24, or 32 bytes for AES-128, AES-192, or AES-256
+	encryptionKey := []byte("84sF#v7Fpt!L#PesYb^AezXrUn2kE%5v")
 
 	encryptedPassword, err := EncryptAES(password, encryptionKey)
 	if err != nil {
@@ -488,7 +487,6 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		return false, err
 	}
 
-	//Create the request body with encrypted password
 	databaseCredentialRequest := CreateDatabaseCredentialRequestDto{
 		OrgId:          orgId,
 		TenantId:       tenantId,
@@ -504,20 +502,19 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		Privilege:      privilege,
 	}
 
-	//Call the API
 	credentialID, err := CallCreateDatabaseCredentialAPI(databaseCredentialRequest)
 	if err != nil {
 		log.Printf("Error while calling Create Database Credential API: %v", err)
 		return false, err
 	}
 	log.Default().Println("The cred id is:", credentialID)
-	//call policy credential mapping
+
 	err = CallPolicyCredentialMapping(orgId, policyID, tenantId, credentialID)
 	if err != nil {
 		log.Printf("Error while calling Update Policy Credential Mapping API: %v", err)
 		return false, err
 	}
-	//Step 4 : Return True if the password is updated successfully
+
 	return true, nil
 }
 

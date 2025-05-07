@@ -14,7 +14,7 @@ import (
 	"github.com/authnull0/database-agent/utils"
 )
 
-// FetchDatabaseStatus fetches the status of a database
+// FetchDatabaseStatus fetches the status of a PostgreSQL database
 func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId string) error {
 	var query string
 
@@ -22,15 +22,16 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	log.Printf("Org Id: %d", orgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
 	log.Printf("Tenant Id: %d", tenantID)
-	//	instanceID, _ := strconv.Atoi(instanceId)
 
-	query = "SHOW STATUS LIKE 'Uptime'"
+	// PostgreSQL query to check uptime
+	query = "SELECT EXTRACT(EPOCH FROM current_timestamp - pg_postmaster_start_time())::integer AS uptime"
+
 	// Execute query for database status
 	row := db.QueryRow(query)
 	var status string
-
 	var uptime int
-	if err := row.Scan(&status, &uptime); err != nil {
+
+	if err := row.Scan(&uptime); err != nil {
 		log.Printf("Database: %s STATUS: %s", dbName, "Inactive")
 		status = "Inactive"
 	} else {
@@ -53,7 +54,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	payload := map[string]interface{}{
 		"orgId":        orgID,
 		"tenantId":     tenantID,
-		"databaseType": config.DBType,
+		"databaseType": "postgres",
 		"databaseName": dbName,
 		"port":         config.Port,
 		"host":         ipAddr,
@@ -65,7 +66,6 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("Error while marshalling the payload: %v", err)
-
 	}
 
 	apiURL := config.API + "/api/v1/databaseService/dbSync"
@@ -74,7 +74,6 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 
 	if err != nil {
 		log.Printf("Error while creating request: %v", err)
-
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -83,15 +82,13 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		log.Printf("Error while making request: %v", err)
-
 	}
 	defer httpResp.Body.Close()
 
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		log.Printf("Error while reading response body: %v", err)
-
 	}
-	log.Default().Println("Response from external service: %v", string(body))
+	log.Default().Printf("Response from external service: %v", string(body))
 	return nil
 }

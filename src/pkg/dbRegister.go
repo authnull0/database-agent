@@ -14,7 +14,8 @@ import (
 	"github.com/authnull0/database-agent/utils"
 )
 
-// RegisterAgent registers the status of the machine
+// RegisterAgent registers the database agent with the central service
+// Compatible with both MySQL and PostgreSQL
 func RegisterAgent(db *sql.DB, dbName string, config DBConfig) string {
 
 	orgID, _ := strconv.Atoi(config.OrgID)
@@ -44,6 +45,7 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) string {
 		"machineKey":   config.MachineKey,
 		"publicIp":     ipAddr,
 		"instanceName": instanceName,
+		"dbType":       config.DBType, // This will be "postgres" for PostgreSQL
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -96,12 +98,10 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) string {
 	fmt.Println("Instance Id returned from register:", instanceId)
 	// NB: instance ID is the machine_id of epm_machines table.
 	return instanceId
-
-	//log.Default().Printf("Response from external service: %v", string(body))
-	//return nil
 }
 
-// Function to call Last Active Time API
+// LastActive updates the last active time of the database agent
+// Compatible with both MySQL and PostgreSQL
 func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig) error {
 	log.Default().Printf("Instance Id after last active api call: %v", instanceId)
 
@@ -115,17 +115,16 @@ func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig) e
 		"orgId":      orgID,
 		"tenantId":   tenantID,
 		"instanceId": instanceId,
+		"dbType":     config.DBType, // This will be "postgres" for PostgreSQL
 	}
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("Error while marshalling the payload: %v", err)
-
 	}
+
 	log.Default().Println("====================================")
-
 	log.Default().Println("Last Active Time Payload", payload)
-
 	log.Default().Println("====================================")
 
 	apiURL := config.API + "/api/v1/databaseService/updateLastActive"
@@ -134,7 +133,6 @@ func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig) e
 
 	if err != nil {
 		log.Printf("Error while creating request: %v", err)
-
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -143,16 +141,13 @@ func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig) e
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		log.Printf("Error while making request: %v", err)
-
 	}
 	defer httpResp.Body.Close()
 
 	body, err := ioutil.ReadAll(httpResp.Body)
 	if err != nil {
 		log.Printf("Error while reading response body: %v", err)
-
 	}
 	log.Default().Printf("Response from external service: %v", string(body))
 	return nil
-
 }

@@ -6,14 +6,14 @@ import (
 	"log"
 )
 
-//var config DBConfig
-
 func ConnectToDB(config DBConfig) (*sql.DB, error) {
 	var dsn string
 
-	dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", config.User, config.Password, config.Host, config.Port)
+	// PostgreSQL connection string format
+	dsn = fmt.Sprintf("host=%s port=%s user=%s password=%s sslmode=disable",
+		config.Host, config.Port, config.User, config.Password)
 
-	db, err := sql.Open(config.DBType, dsn)
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func ConnectToProxysqlDB(config DBConfig) (*sql.DB, error) {
 func isSystemDatabase(dbName, dbType string) bool {
 	systemDatabases := map[string][]string{
 		"mysql":    {"mysql", "information_schema", "performance_schema", "sys"},
-		"Postgres": {"postgres", "template0", "template1"},
+		"postgres": {"postgres", "template0", "template1", "information_schema"},
 		"MSSQL":    {"master", "tempdb", "model", "msdb"},
 		"Oracle":   {"SYSTEM", "SYSAUX"},
 	}
@@ -56,10 +56,8 @@ func isSystemDatabase(dbName, dbType string) bool {
 func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 	var databases []string
 
-	// Fetch database names
-	databasesQuery := ""
-
-	databasesQuery = "SHOW DATABASES"
+	// PostgreSQL query to list databases
+	databasesQuery := "SELECT datname FROM pg_database WHERE datistemplate = false"
 
 	// Execute query for database names
 	rows, err := db.Query(databasesQuery)
@@ -89,7 +87,7 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		if err != nil {
 			log.Printf("Failed to register agent for the database %s: %v", dbName, err)
 		}
-		log.Println("Regitser Agent Ended")
+		log.Println("Register Agent Ended")
 
 		// Last Active Time Function call
 		err = LastActive(instanceId, db, dbName, config)
@@ -97,7 +95,7 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		if err != nil {
 			log.Printf("Failed to get last active time of the database %s: %v", dbName, err)
 		}
-		log.Println("Last Active Time call  Ended")
+		log.Println("Last Active Time call Ended")
 
 		// Fetch database status
 		err = FetchDatabaseStatus(db, dbName, config, instanceId)
@@ -125,7 +123,6 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		if err != nil {
 			log.Printf("Failed to poll checkout job: %v", err)
 		}
-
 	}
 
 	return nil
