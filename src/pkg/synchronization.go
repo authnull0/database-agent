@@ -4,7 +4,12 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strconv"
+
+	_ "github.com/lib/pq" // Import PostgreSQL driver
 )
+
+// DBConfig holds the database connection configuration
 
 func ConnectToDB(config DBConfig) (*sql.DB, error) {
 	var dsn string
@@ -17,6 +22,15 @@ func ConnectToDB(config DBConfig) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Test the connection
+	err = db.Ping()
+	if err != nil {
+		log.Printf("Cannot ping database: %v", err)
+		return nil, err
+	}
+
+	log.Printf("Successfully connected to PostgreSQL server at %s:%s", config.Host, config.Port)
 	return db, nil
 }
 
@@ -62,6 +76,7 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 	// Execute query for database names
 	rows, err := db.Query(databasesQuery)
 	if err != nil {
+		log.Printf("Error querying databases: %v", err)
 		return err
 	}
 	defer rows.Close()
@@ -69,6 +84,7 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 	for rows.Next() {
 		var dbName string
 		if err := rows.Scan(&dbName); err != nil {
+			log.Printf("Error scanning database name: %v", err)
 			return err
 		}
 
@@ -79,50 +95,65 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		}
 
 		databases = append(databases, dbName)
+		log.Printf("Processing database: %s", dbName)
 
-		// Register the database agent
+		// Register the database agent and get its ID
 		instanceId := RegisterAgent(db, dbName, config)
-		log.Default().Printf("Instance Id: %v", instanceId)
+		log.Printf("Registered agent for database %s with Instance ID: %s", dbName, instanceId)
 
-		if err != nil {
-			log.Printf("Failed to register agent for the database %s: %v", dbName, err)
+		if instanceId == "" {
+			log.Printf("Failed to register agent for the database %s", dbName)
+			continue // Skip this database if registration failed
 		}
-		log.Println("Register Agent Ended")
+
+		// Get the database ID from db_synchronization
+		var dbId int
+		dbIdQuery := "SELECT id FROM did.db_synchronization WHERE db_name = $1 AND org_id = $2 AND tenant_id = $3"
+		orgID, _ := strconv.Atoi(config.OrgID)
+		tenantID, _ := strconv.Atoi(config.TenantID)
+
+		err = db.QueryRow(dbIdQuery, dbName, orgID, tenantID).Scan(&dbId)
+		if err == nil {
+			log.Printf("Found database ID %d for database %s", dbId, dbName)
+			// Use the database ID as the instance ID for consistency
+			instanceId = strconv.Itoa(dbId)
+		} else {
+			log.Printf("Could not find database ID for %s, using instance ID: %s", dbName, instanceId)
+		}
 
 		// Last Active Time Function call
 		err = LastActive(instanceId, db, dbName, config)
-
 		if err != nil {
 			log.Printf("Failed to get last active time of the database %s: %v", dbName, err)
 		}
-		log.Println("Last Active Time call Ended")
+		log.Println("Last Active Time call completed")
 
 		// Fetch database status
 		err = FetchDatabaseStatus(db, dbName, config, instanceId)
-
 		if err != nil {
 			log.Printf("Failed to fetch status for database %s: %v", dbName, err)
 		}
-		log.Println("FetchDatabaseStatus Ended")
+		log.Println("FetchDatabaseStatus completed")
 
 		// Fetch tables and privileges for each database
 		err = FetchTablePrivileges(db, dbName, config, instanceId)
 		if err != nil {
 			log.Printf("Failed to fetch table privileges for database %s: %v", dbName, err)
 		}
-		log.Println("FetchDatabasePrivileges Ended")
+		log.Println("FetchTablePrivileges completed")
 
-		// Fetch table and column names
+		// Fetch table and column names with the main database connection for querying db_synchronization
 		err = FetchTables(db, dbName, config, instanceId)
 		if err != nil {
-			log.Printf("Failed to fetch tables and columns: %v", err)
+			log.Printf("Failed to fetch tables and columns for %s: %v", dbName, err)
 		}
-		log.Println("FetchTables Ended")
+		log.Println("FetchTables completed")
 
 		err = PollCheckoutJob(db, dbName, config)
 		if err != nil {
 			log.Printf("Failed to poll checkout job: %v", err)
 		}
+		log.Println("All operations completed for database:", dbName)
 	}
 
 	return nil

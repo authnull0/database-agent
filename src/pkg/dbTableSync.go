@@ -9,23 +9,45 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+
+	_ "github.com/lib/pq" // Import PostgreSQL driver
 )
 
-func FetchTables(db *sql.DB, dbName string, config DBConfig, instanceId string) error {
+func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId string) error {
 	orgID, _ := strconv.Atoi(config.OrgID)
 	log.Printf("Org Id: %d", orgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
 	log.Printf("Tenant Id: %d", tenantID)
-	log.Printf("Fetching table names FROM...")
+	log.Printf("Fetching table names FROM database: %s", dbName)
 	tables := make(map[string][]string)
-	log.Printf(dbName)
+
+	// Create a new connection to the specific database
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		config.Host, config.Port, config.User, config.Password, dbName)
+
+	specificDb, err := sql.Open("postgres", dsn)
+	if err != nil {
+		log.Printf("Error connecting to specific database %s: %v", dbName, err)
+		return err
+	}
+	defer specificDb.Close()
+
+	// Test the connection
+	err = specificDb.Ping()
+	if err != nil {
+		log.Printf("Cannot ping database %s: %v", dbName, err)
+		return err
+	}
+
+	log.Printf("Successfully connected to database: %s", dbName)
 
 	// PostgreSQL query to list tables in the schema
 	tableQuery := "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public'"
-	log.Println(tableQuery)
+	log.Println("Executing query:", tableQuery)
 
-	rows, err := db.Query(tableQuery)
+	rows, err := specificDb.Query(tableQuery)
 	if err != nil {
+		log.Printf("Error querying tables: %v", err)
 		return err
 	}
 	defer rows.Close()
@@ -33,41 +55,63 @@ func FetchTables(db *sql.DB, dbName string, config DBConfig, instanceId string) 
 	for rows.Next() {
 		var tableName string
 		if err := rows.Scan(&tableName); err != nil {
+			log.Printf("Error scanning table name: %v", err)
 			return err
 		}
 
 		// PostgreSQL query to list columns in a table
 		columnsQuery := fmt.Sprintf("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '%s'", tableName)
-		columnRows, err := db.Query(columnsQuery)
+		columnRows, err := specificDb.Query(columnsQuery)
 		if err != nil {
+			log.Printf("Error querying columns for table %s: %v", tableName, err)
 			return err
 		}
-		defer columnRows.Close()
 
 		var columns []string
 		for columnRows.Next() {
 			var columnName string
 			if err := columnRows.Scan(&columnName); err != nil {
-				log.Println(err)
+				log.Printf("Error scanning column name: %v", err)
+				columnRows.Close()
 				return err
 			}
 			columns = append(columns, columnName)
 		}
+		columnRows.Close()
 		tables[tableName] = columns
 	}
 
-	log.Printf("Fetched table names: %v", tables)
+	log.Printf("Fetched tables for %s: %v", dbName, tables)
+
+	// Skip sending if no tables were found
+	if len(tables) == 0 {
+		log.Printf("No tables found in database %s, skipping API call", dbName)
+		return nil
+	}
+
+	// Get the database ID from db_synchronization to ensure correct mapping
+	var dbId int
+	dbIdQuery := "SELECT id FROM did.db_synchronization WHERE db_name = $1 AND org_id = $2 AND tenant_id = $3"
+	err = mainDb.QueryRow(dbIdQuery, dbName, orgID, tenantID).Scan(&dbId)
+	if err != nil {
+		log.Printf("Error retrieving database ID for %s: %v", dbName, err)
+		// Continue with instanceId as fallback
+	} else {
+		log.Printf("Found database ID %d for database %s", dbId, dbName)
+		// Update instanceId with the correct dbId to ensure proper mapping
+		instanceId = strconv.Itoa(dbId)
+	}
 
 	payload := map[string]interface{}{
 		"orgId":        orgID,
 		"tenantId":     tenantID,
-		"databaseType": "postgres", // Changed from config.DBType to explicitly specify postgres
+		"databaseType": "postgres",
 		"databaseName": dbName,
 		"tables":       tables,
 		"instanceId":   instanceId,
 	}
 
-	log.Printf("Payload created: %v", payload)
+	log.Printf("Payload created for %s: %+v", dbName, payload)
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -92,9 +136,8 @@ func FetchTables(db *sql.DB, dbName string, config DBConfig, instanceId string) 
 	defer res.Body.Close()
 
 	bodyBytes, err := io.ReadAll(res.Body)
-	log.Println(string(bodyBytes))
-	log.Println("Payload Sent: ")
-	log.Println(string(payloadBytes))
+	log.Println("API Response:", string(bodyBytes))
+	log.Println("Payload Sent:", string(payloadBytes))
 
 	return nil
 }
