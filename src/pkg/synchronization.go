@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"strconv"
 
 	_ "github.com/lib/pq" // Import PostgreSQL driver
 )
@@ -106,22 +105,6 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 			continue // Skip this database if registration failed
 		}
 
-		// Get the database ID from db_synchronization
-		var dbId int
-		dbIdQuery := "SELECT id FROM did.db_synchronization WHERE db_name = $1 AND org_id = $2 AND tenant_id = $3"
-		orgID, _ := strconv.Atoi(config.OrgID)
-		tenantID, _ := strconv.Atoi(config.TenantID)
-
-		err = db.QueryRow(dbIdQuery, dbName, orgID, tenantID).Scan(&dbId)
-		if err == nil {
-			log.Printf("Found database ID %d for database %s", dbId, dbName)
-			// Use the database ID as the instance ID for consistency
-			instanceId = strconv.Itoa(dbId)
-		} else {
-			log.Printf("Could not find database ID for %s, using instance ID: %s", dbName, instanceId)
-		}
-
-		// Last Active Time Function call
 		err = LastActive(instanceId, db, dbName, config)
 		if err != nil {
 			log.Printf("Failed to get last active time of the database %s: %v", dbName, err)
