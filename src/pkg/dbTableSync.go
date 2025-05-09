@@ -89,19 +89,6 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 		return nil
 	}
 
-	// Get the database ID from db_synchronization to ensure correct mapping
-	var dbId int
-	dbIdQuery := "SELECT id FROM did.db_synchronization WHERE db_name = $1 AND org_id = $2 AND tenant_id = $3"
-	err = mainDb.QueryRow(dbIdQuery, dbName, orgID, tenantID).Scan(&dbId)
-	if err != nil {
-		log.Printf("Error retrieving database ID for %s: %v", dbName, err)
-		// Continue with instanceId as fallback
-	} else {
-		log.Printf("Found database ID %d for database %s", dbId, dbName)
-		// Update instanceId with the correct dbId to ensure proper mapping
-		instanceId = strconv.Itoa(dbId)
-	}
-
 	payload := map[string]interface{}{
 		"orgId":        orgID,
 		"tenantId":     tenantID,
