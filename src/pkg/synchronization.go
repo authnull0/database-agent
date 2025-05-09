@@ -41,7 +41,7 @@ func ConnectToProxysqlDB(config DBConfig) (*sql.DB, error) {
 		"6032",       // port
 		"admin,test") // username as a parameter
 
-	db, err := sql.Open(config.DBType, dsn)
+	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("error opening DB connection: %v", err)
 	}
