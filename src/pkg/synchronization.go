@@ -34,13 +34,23 @@ func ConnectToDB(config DBConfig) (*sql.DB, error) {
 }
 
 func ConnectToProxysqlDB(config DBConfig) (*sql.DB, error) {
-	var dsn string
-	dsn = fmt.Sprintf("admin,test:%s@tcp(%s:%s)/", "admin", "127.0.0.1", "6032")
+	// Another approach - pass the username as a parameter instead of in the main DSN
+	dsn := fmt.Sprintf(":%s@tcp(%s:%s)/?user=%s",
+		"admin",      // password
+		"127.0.0.1",  // host
+		"6032",       // port
+		"admin,test") // username as a parameter
 
 	db, err := sql.Open(config.DBType, dsn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error opening DB connection: %v", err)
 	}
+
+	// Test the connection
+	if err = db.Ping(); err != nil {
+		return nil, fmt.Errorf("error pinging ProxySQL: %v", err)
+	}
+
 	return db, nil
 }
 

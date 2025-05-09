@@ -4,15 +4,18 @@ go 1.22.1
 
 require (
 	github.com/google/uuid v1.4.0
-	github.com/joho/godotenv v1.5.1
 	github.com/spf13/viper v1.19.0
+	gorm.io/driver/mysql v1.5.7
 )
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/golang-sql/civil v0.0.0-20190719163853-cb61b32ac6fe // indirect
 	github.com/golang-sql/sqlexp v0.1.0 // indirect
+	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
 	golang.org/x/crypto v0.21.0 // indirect
+	gorm.io/gorm v1.25.7 // indirect
 )
 
 require (
