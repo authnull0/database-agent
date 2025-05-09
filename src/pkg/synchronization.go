@@ -34,23 +34,21 @@ func ConnectToDB(config DBConfig) (*sql.DB, error) {
 }
 
 func ConnectToProxysqlDB(config DBConfig) (*sql.DB, error) {
-	// Another approach - pass the username as a parameter instead of in the main DSN
-	dsn := fmt.Sprintf(":%s@tcp(%s:%s)/?user=%s",
-		"admin",      // password
-		"127.0.0.1",  // host
-		"6032",       // port
-		"admin,test") // username as a parameter
+	// Very simple, direct MySQL connection to ProxySQL
+	dsn := "admin,test:admin@tcp(127.0.0.1:6032)/"
 
+	// Explicitly use "mysql" driver for ProxySQL
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("error opening DB connection: %v", err)
+		return nil, fmt.Errorf("error opening MySQL connection: %v", err)
 	}
 
-	// Test the connection
+	// Test the connection with a simple ping
 	if err = db.Ping(); err != nil {
 		return nil, fmt.Errorf("error pinging ProxySQL: %v", err)
 	}
 
+	log.Println("Successfully connected to ProxySQL")
 	return db, nil
 }
 
