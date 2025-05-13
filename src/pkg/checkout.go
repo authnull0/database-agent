@@ -122,7 +122,7 @@ type Permission struct{}     // Placeholder for missing struct
 func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 
 	//API call to get all jobs from the queue
-	url := "https:/dev.api.authnull.com/api/v1/databaseService/getJobQueue"
+	url := "https://dev.api.authnull.com/api/v1/databaseService/getJobQueue"
 	orgID, _ := strconv.Atoi(Config.OrgID)
 	tenantID, _ := strconv.Atoi(Config.TenantID)
 
