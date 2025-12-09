@@ -18,9 +18,9 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 
 	// PostgreSQL uses different system catalogs for privilege information
 	query = `
-	SELECT 
+	SELECT
 		r.rolname AS username,
-		'localhost' AS host,  -- PostgreSQL doesn't have host concepts like MySQL
+		'%' AS host,  -- PostgreSQL doesn't have host concepts like MySQL, using % for compatibility
 		CASE 
 			WHEN r.rolsuper THEN 'ALL PRIVILEGES'
 			ELSE string_agg(
