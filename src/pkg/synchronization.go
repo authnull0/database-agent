@@ -14,7 +14,8 @@ func ConnectToDB(config DBConfig) (*sql.DB, error) {
 	var dsn string
 
 	// PostgreSQL connection string format
-	dsn = fmt.Sprintf("host=%s port=%s user=%s password=%s sslmode=disable",
+	// Connect to the default 'postgres' database initially
+	dsn = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=postgres sslmode=disable",
 		config.Host, config.Port, config.User, config.Password)
 
 	db, err := sql.Open("postgres", dsn)
