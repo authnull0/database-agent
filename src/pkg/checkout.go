@@ -122,7 +122,7 @@ type Permission struct{}     // Placeholder for missing struct
 func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 
 	//API call to get all jobs from the queue
-	url := "https://dev.api.authnull.com/api/v1/databaseService/getJobQueue"
+	url := "https://prod.api.authnull.com/api/v1/databaseService/getJobQueue"
 	orgID, _ := strconv.Atoi(Config.OrgID)
 	tenantID, _ := strconv.Atoi(Config.TenantID)
 
@@ -203,7 +203,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 		if success {
 			log.Printf("Credentials generated successfully for job: %s", job.JobName)
 			//Call Update Job API to update the job status to completed
-			updateJobURL := "https://dev.api.authnull.com/api/v1/databaseService/updateQueue"
+			updateJobURL := "https://prod.api.authnull.com/api/v1/databaseService/updateQueue"
 			updateJobPayload := map[string]interface{}{
 				"org_id":    orgID,
 				"tenant_id": tenantID,
@@ -243,7 +243,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 }
 
 func FetchPolicyDetails(orgID int, tenantID int, policyID uuid.UUID) (*GetPolicyDetailsResponse, error) {
-	url := "https://dev.api.authnull.com/api/v1/policyService/getPolicyDetails"
+	url := "https://prod.api.authnull.com/api/v1/policyService/getPolicyDetails"
 
 	payload := GetPolicyDetails{
 		OrgId:    orgID,
@@ -537,7 +537,7 @@ func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCre
 		return 0, errors.New("failed to marshal request body: " + err.Error())
 	}
 	log.Default().Println("Successfully Marshalled Request Body")
-	url := "https://dev.api.authnull.com/api/v1/credential/createDatabaseCredential"
+	url := "https://prod.api.authnull.com/api/v1/credential/createDatabaseCredential"
 	log.Default().Println("URL", url)
 	//Create the request
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(databaseCredentialRequestBytes))
@@ -587,7 +587,7 @@ func CallPolicyCredentialMapping(orgId int, policyId uuid.UUID, tenantId int, cr
 	}
 	log.Default().Println(string(jsonData))
 	client := &http.Client{}
-	url := "https://dev.api.authnull.com/api/v1/policyService/updatePolicyCredentialMapping"
+	url := "https://prod.api.authnull.com/api/v1/policyService/updatePolicyCredentialMapping"
 	log.Default().Println("URL", url)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
