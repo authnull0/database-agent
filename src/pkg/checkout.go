@@ -289,9 +289,10 @@ func FetchPolicyDetails(orgID int, tenantID int, policyID uuid.UUID) (*GetPolicy
 		return nil, fmt.Errorf("invalid policy response: %s (code: %d)", apiResponse.Message, apiResponse.Code)
 	}
 
-	if apiResponse.Data.Database.Tables == nil {
-		return nil, errors.New("policy response contains no tables data")
-	}
+	// Tables field is optional for PostgreSQL
+	// if apiResponse.Data.Database.Tables == nil {
+	// 	return nil, errors.New("policy response contains no tables data")
+	// }
 
 	return &apiResponse, nil
 }
@@ -331,9 +332,10 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		return false, errors.New("policy details cannot be nil")
 	}
 
-	if len(policyDetails.Data.Database.Tables) == 0 {
-		return false, errors.New("no tables found in policy details")
-	}
+	// Tables field is optional for PostgreSQL
+	// if len(policyDetails.Data.Database.Tables) == 0 {
+	// 	return false, errors.New("no tables found in policy details")
+	// }
 
 	if len(policyDetails.Data.Database.Privilege) == 0 {
 		return false, errors.New("no privileges found in policy details")
@@ -474,8 +476,17 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	orgId, _ := strconv.Atoi(Config.OrgID)
 	tenantId, _ := strconv.Atoi(Config.TenantID)
 
+	// Tables and FieldMasking are optional for PostgreSQL
 	tables := policyDetails.Data.Database.Tables
+	if tables == nil {
+		tables = []string{} // Use empty slice if not provided
+	}
+
 	fieldMasking := policyDetails.Data.Database.FieldMasking
+	if fieldMasking == nil {
+		fieldMasking = make(map[string][]string) // Use empty map if not provided
+	}
+
 	privilege := policyDetails.Data.Database.Privilege
 
 	// Step 3: Encrypt the password before sending it to the API
