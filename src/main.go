@@ -93,6 +93,13 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 	// log.Default().Printf("Database connection establised successfully..")
 	defer db.Close()
 
+	// Initialize ProxySQL with one-time setup queries
+	log.Default().Printf("Initializing ProxySQL...")
+	if err := pkg.InitializeProxySQL(config); err != nil {
+		log.Printf("Warning: ProxySQL initialization failed: %v", err)
+		// Continue anyway - ProxySQL might not be available or already initialized
+	}
+
 	// Ticker to run the synchronization every minute
 	ticker := time.NewTicker(time.Duration(timeInterval) * time.Minute)
 	defer ticker.Stop()

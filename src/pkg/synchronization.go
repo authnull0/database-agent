@@ -53,6 +53,38 @@ func ConnectToProxysqlDB(config DBConfig) (*sql.DB, error) {
 	return db, nil
 }
 
+// InitializeProxySQL runs one-time setup queries when the agent starts
+func InitializeProxySQL(config DBConfig) error {
+	proxysqlDB, err := ConnectToProxysqlDB(config)
+	if err != nil {
+		return fmt.Errorf("failed to connect to ProxySQL for initialization: %w", err)
+	}
+	defer proxysqlDB.Close()
+
+	// One-time initialization queries
+	initQueries := []string{
+		"INSERT INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (0, '127.0.0.1', 5432)",
+		"LOAD PGSQL SERVERS TO RUNTIME",
+		"SAVE PGSQL SERVERS TO DISK",
+		"SET pgsql-authentication_method = 1",
+		"LOAD PGSQL VARIABLES TO RUNTIME",
+		"SAVE PGSQL VARIABLES TO DISK",
+	}
+
+	for _, query := range initQueries {
+		_, err := proxysqlDB.Exec(query)
+		if err != nil {
+			// Log but don't fail - server might already exist or config already set
+			log.Printf("ProxySQL init query warning: %s - %v", query, err)
+		} else {
+			log.Printf("ProxySQL init query success: %s", query)
+		}
+	}
+
+	log.Println("ProxySQL initialization completed")
+	return nil
+}
+
 // checks if a given database is a system default database
 func isSystemDatabase(dbName, dbType string) bool {
 	systemDatabases := map[string][]string{
