@@ -43,23 +43,27 @@ type GetAllJobQueueResponse struct {
 	Data       []JobQueue `json:"data"`
 }
 type JobQueue struct {
-	PolicyID     uuid.UUID `gorm:"primaryKey;column:id"`
-	ID           int       `gorm:"primaryKey;column:id"`
-	JobName      string    `gorm:"column:job_name"`
-	Status       string    `gorm:"column:status"`
-	DbUserID     int       `gorm:"column:db_user_id"`
-	DbID         int       `gorm:"column:db_id"`
-	WalletUserID int       `gorm:"column:wallet_user_id"`
-	Host         string    `gorm:"column:host"`
-	DomainID     int       `gorm:"column:domain_id;default:0"`
-	IssuerID     int       `gorm:"column:issuer_id;default:0"`
-	Port         *int      `gorm:"column:port"`
-	CredentialID *int      `gorm:"column:credential_id"`
-	Table_Name   string    `gorm:"column:table_name"`
-	Fields       string    `gorm:"column:fields"`
-	Privileges   string    `gorm:"column:privileges"`
-	UpdatedAt    time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
-	CreatedAt    time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
+	PolicyID      uuid.UUID `gorm:"primaryKey;column:id"`
+	ID            int       `gorm:"primaryKey;column:id"`
+	JobName       string    `gorm:"column:job_name"`
+	Status        string    `gorm:"column:status"`
+	DbUserID      int       `gorm:"column:db_user_id"`
+	DbID          int       `gorm:"column:db_id"`
+	WalletUserID  int       `gorm:"column:wallet_user_id"`
+	Host          string    `gorm:"column:host"`
+	DomainID      int       `gorm:"column:domain_id;default:0"`
+	IssuerID      int       `gorm:"column:issuer_id;default:0"`
+	Port          *int      `gorm:"column:port"`
+	CredentialID  *int      `gorm:"column:credential_id"`
+	Table_Name    string    `gorm:"column:table_name"`
+	Fields        string    `gorm:"column:fields"`
+	Privileges    string    `gorm:"column:privileges"`
+	UpdatedAt     time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
+	CreatedAt     time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
+	AgentVMIP     string    `gorm:"column:agent_vm_ip" json:"agent_vm_ip"`         // Multi-host: Agent VM IP
+	HostVMIP      string    `gorm:"column:host_vm_ip" json:"host_vm_ip"`           // Multi-host: Database host VM IP
+	HostgroupID   int       `gorm:"column:hostgroup_id" json:"hostgroup_id"`       // Multi-host: ProxySQL hostgroup ID
+	DefaultSchema string    `gorm:"column:default_schema" json:"default_schema"`   // Multi-host: ProxySQL default schema (database name)
 }
 type CreateDatabaseCredentialRequestDto struct {
 	OrgId          int                 `json:"orgId"`
@@ -193,9 +197,15 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 
 		fmt.Println("Job Details :", job)
 
+		// Use hostgroup and default_schema from job for multi-host routing
+		// DefaultSchema defaults to dbName if not provided in job
+		defaultSchema := job.DefaultSchema
+		if defaultSchema == "" {
+			defaultSchema = dbName
+		}
 		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host,
 			job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privileges, job.DbUserID,
-			job.PolicyID, policyDetails)
+			job.PolicyID, policyDetails, job.HostgroupID, defaultSchema)
 		if err != nil {
 			log.Printf("Error while generating credentials: %v", err)
 			continue
@@ -325,7 +335,7 @@ func EncryptAES(plaintext string, key []byte) (string, error) {
 
 func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string,
 	WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string, DbUserID int,
-	policyID uuid.UUID, policyDetails *GetPolicyDetailsResponse) (bool, error) {
+	policyID uuid.UUID, policyDetails *GetPolicyDetailsResponse, hostgroupID int, defaultSchema string) (bool, error) {
 
 	// Validate policy details
 	if policyDetails == nil {
@@ -440,16 +450,40 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 
 	if userCount2 == 0 {
 		// Create the user if it does not exist
-		createUserQuery := fmt.Sprintf("INSERT INTO pgsql_users (username, password, active, use_ssl) VALUES ('%s', '%s', 1, 0)", dbUserName, password)
+		// Include default_hostgroup and default_schema for multi-host routing
+		var createUserQuery string
+		if hostgroupID > 0 && defaultSchema != "" {
+			createUserQuery = fmt.Sprintf("INSERT INTO pgsql_users (username, password, default_hostgroup, default_schema, active, use_ssl) VALUES ('%s', '%s', %d, '%s', 1, 0)", dbUserName, password, hostgroupID, defaultSchema)
+		} else if hostgroupID > 0 {
+			createUserQuery = fmt.Sprintf("INSERT INTO pgsql_users (username, password, default_hostgroup, active, use_ssl) VALUES ('%s', '%s', %d, 1, 0)", dbUserName, password, hostgroupID)
+		} else {
+			// Legacy mode: no hostgroup specified
+			createUserQuery = fmt.Sprintf("INSERT INTO pgsql_users (username, password, active, use_ssl) VALUES ('%s', '%s', 1, 0)", dbUserName, password)
+		}
 		_, err = proxySQLDB.Exec(createUserQuery)
 
 		if err != nil {
 			log.Printf("Error while creating user %s in ProxySQL: %v", dbUserName, err)
 			return false, err
 		}
-		log.Printf("User %s created successfully in ProxySQL", dbUserName)
+		log.Printf("User %s created successfully in ProxySQL with hostgroup=%d, schema=%s", dbUserName, hostgroupID, defaultSchema)
 	} else {
-		log.Printf("User %s already exists in ProxySQL", dbUserName)
+		// User exists, update hostgroup and schema if provided
+		if hostgroupID > 0 {
+			updateHostgroupQuery := fmt.Sprintf("UPDATE pgsql_users SET default_hostgroup = %d WHERE username = '%s'", hostgroupID, dbUserName)
+			_, err = proxySQLDB.Exec(updateHostgroupQuery)
+			if err != nil {
+				log.Printf("Error updating hostgroup for user %s: %v", dbUserName, err)
+			}
+		}
+		if defaultSchema != "" {
+			updateSchemaQuery := fmt.Sprintf("UPDATE pgsql_users SET default_schema = '%s' WHERE username = '%s'", defaultSchema, dbUserName)
+			_, err = proxySQLDB.Exec(updateSchemaQuery)
+			if err != nil {
+				log.Printf("Error updating default_schema for user %s: %v", dbUserName, err)
+			}
+		}
+		log.Printf("User %s already exists in ProxySQL, updated hostgroup=%d, schema=%s", dbUserName, hostgroupID, defaultSchema)
 	}
 
 	// Update the password for the user in ProxySQL

@@ -9,11 +9,12 @@ type DBConfig struct {
 	Port         string `mapstructure:"DB_PORT"`       // Database port (typically "5432" for PostgreSQL)
 	TimeInterval string `mapstructure:"TIME_INTERVAL"` // Polling interval
 	API          string `mapstructure:"API"`           // API endpoint
-	Host         string `mapstructure:"DB_HOST"`       // Database host
+	Host         string `mapstructure:"DB_HOST"`       // Database host (legacy single-host mode)
 	User         string `mapstructure:"DB_USER"`       // Database username
 	Password     string `mapstructure:"DB_PASSWORD"`   // Database password
 	Key          string `mapstructure:"KEY"`           // Authentication key
 	MachineKey   string `mapstructure:"MACHINE_KEY"`   // Machine identifier
+	AgentVMIP    string `mapstructure:"AGENT_VM_IP"`   // Agent VM IP address (for multi-host mode)
 }
 
 // InstanceCreatedResponse contains the response from the register agent API
@@ -21,4 +22,23 @@ type InstanceCreatedResponse struct {
 	InstanceId string // Database instance ID
 	Code       string // Response code
 	Message    string // Response message
+}
+
+// DatabaseHost represents a database host configuration for multi-host support
+type DatabaseHost struct {
+	HostID      int    `json:"host_id"`       // Host ID from database
+	AgentVMIP   string `json:"agent_vm_ip"`   // IP of the agent/proxysql VM
+	HostVMIP    string `json:"host_vm_ip"`    // IP of the actual database host
+	HostgroupID int    `json:"hostgroup_id"`  // ProxySQL hostgroup ID
+	Port        int    `json:"port"`          // Database port
+	DBType      string `json:"db_type"`       // Database type (postgres, mysql, etc.)
+	Status      string `json:"status"`        // Host status (active, inactive)
+}
+
+// DatabaseHostsResponse contains the response from get hosts API
+type DatabaseHostsResponse struct {
+	Code    string         `json:"code"`
+	Status  string         `json:"status"`
+	Message string         `json:"message"`
+	Data    []DatabaseHost `json:"data"`
 }
