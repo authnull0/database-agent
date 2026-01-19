@@ -43,19 +43,28 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	instanceName, _ := os.Hostname()
 	log.Default().Println("Register Agent", instanceName)
 
-	ipAddr, err := utils.GetPublicIP()
+	// Get the public IP of the agent VM (for legacy mode fallback)
+	publicIP, err := utils.GetPublicIP()
 	if err != nil {
 		fmt.Println("Failed to get PublicIp Address", err)
-		//return ""
 	}
-	log.Default().Println("IP Address:", ipAddr)
+
+	// Determine the actual database host IP
+	// In multi-host mode, config.Host contains the actual database host IP
+	// In legacy single-host mode, use the public IP
+	hostIP := config.Host
+	if hostIP == "" {
+		hostIP = publicIP
+	}
+	log.Default().Println("Database Host IP:", hostIP)
 
 	// Sync database information with the API
 	// Include agent_vm_ip for multi-host mode
 	agentVMIP := config.AgentVMIP
 	if agentVMIP == "" {
-		agentVMIP = ipAddr // Legacy mode: agent VM IP is same as host
+		agentVMIP = publicIP // Legacy mode: agent VM IP is same as public IP
 	}
+	log.Default().Println("Agent VM IP:", agentVMIP)
 
 	payload := map[string]interface{}{
 		"orgId":        orgID,
@@ -63,7 +72,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 		"databaseType": "postgres",
 		"databaseName": dbName,
 		"port":         config.Port,
-		"host":         ipAddr,        // Host VM IP (where database runs)
+		"host":         hostIP,        // Host VM IP (where database runs)
 		"agentVmIp":    agentVMIP,     // Agent VM IP (where proxysql runs)
 		"status":       status,
 		"uuid":         config.Key,
