@@ -82,8 +82,24 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 	if err != nil {
 		log.Default().Println(err)
 	}
-	// Connect to the database
-	log.Default().Printf("Trying to connect to database..")
+
+	// Check for multi-host mode
+	hostsFilePath := "./db_hosts.json"
+	isMultiHost := false
+
+	// Try to detect multi-host mode
+	if config.AgentVMIP != "" {
+		log.Printf("Agent VM IP configured: %s - checking for multi-host mode", config.AgentVMIP)
+		// Try to load and process multiple hosts
+		err = pkg.ProcessMultipleHosts(config, hostsFilePath)
+		if err == nil {
+			isMultiHost = true
+			log.Printf("Multi-host mode initialized successfully")
+		}
+	}
+
+	// Connect to the primary database (from db.env)
+	log.Default().Printf("Trying to connect to primary database..")
 	db, err := pkg.ConnectToDB(config)
 	if err != nil {
 		log.Fatalf("Failed to connect to DB: %v", err)
@@ -108,7 +124,16 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 		select {
 		case <-ticker.C:
 			log.Default().Println("DB Synchronization Started...")
-			// Fetch database details and their privileges
+
+			// Try multi-host sync first
+			if isMultiHost {
+				if pkg.SyncMultipleHosts(config, hostsFilePath) {
+					log.Default().Println("Multi-host sync completed")
+					continue // Skip single-host sync if multi-host succeeded
+				}
+			}
+
+			// Fall back to single-host mode
 			err = pkg.FetchDatabaseDetails(db, config)
 			if err != nil {
 				log.Printf("Failed to fetch database details: %v", err)

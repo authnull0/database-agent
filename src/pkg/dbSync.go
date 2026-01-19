@@ -51,13 +51,20 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	log.Default().Println("IP Address:", ipAddr)
 
 	// Sync database information with the API
+	// Include agent_vm_ip for multi-host mode
+	agentVMIP := config.AgentVMIP
+	if agentVMIP == "" {
+		agentVMIP = ipAddr // Legacy mode: agent VM IP is same as host
+	}
+
 	payload := map[string]interface{}{
 		"orgId":        orgID,
 		"tenantId":     tenantID,
 		"databaseType": "postgres",
 		"databaseName": dbName,
 		"port":         config.Port,
-		"host":         ipAddr,
+		"host":         ipAddr,        // Host VM IP (where database runs)
+		"agentVmIp":    agentVMIP,     // Agent VM IP (where proxysql runs)
 		"status":       status,
 		"uuid":         config.Key,
 		"instanceId":   instanceId,

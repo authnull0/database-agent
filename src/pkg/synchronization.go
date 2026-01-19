@@ -54,6 +54,7 @@ func ConnectToProxysqlDB(config DBConfig) (*sql.DB, error) {
 }
 
 // InitializeProxySQL runs one-time setup queries when the agent starts
+// For legacy single-host mode, it registers the default host
 func InitializeProxySQL(config DBConfig) error {
 	proxysqlDB, err := ConnectToProxysqlDB(config)
 	if err != nil {
@@ -61,11 +62,8 @@ func InitializeProxySQL(config DBConfig) error {
 	}
 	defer proxysqlDB.Close()
 
-	// One-time initialization queries
+	// One-time initialization queries for base configuration
 	initQueries := []string{
-		"INSERT INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (0, '127.0.0.1', 5432)",
-		"LOAD PGSQL SERVERS TO RUNTIME",
-		"SAVE PGSQL SERVERS TO DISK",
 		"SET pgsql-authentication_method = 1",
 		"LOAD PGSQL VARIABLES TO RUNTIME",
 		"SAVE PGSQL VARIABLES TO DISK",
@@ -74,15 +72,131 @@ func InitializeProxySQL(config DBConfig) error {
 	for _, query := range initQueries {
 		_, err := proxysqlDB.Exec(query)
 		if err != nil {
-			// Log but don't fail - server might already exist or config already set
 			log.Printf("ProxySQL init query warning: %s - %v", query, err)
 		} else {
 			log.Printf("ProxySQL init query success: %s", query)
 		}
 	}
 
+	// Legacy single-host mode: register default host with hostgroup 0
+	// In multi-host mode, hosts are registered dynamically via RegisterHostInProxySQL
+	if config.Host != "" && config.AgentVMIP == "" {
+		err = RegisterHostInProxySQL(config, config.Host, 0, 5432)
+		if err != nil {
+			log.Printf("Warning: Failed to register default host in ProxySQL: %v", err)
+		}
+	}
+
 	log.Println("ProxySQL initialization completed")
 	return nil
+}
+
+// RegisterHostInProxySQL registers a database host in ProxySQL pgsql_servers table
+// hostgroupID determines which hostgroup this server belongs to for routing
+func RegisterHostInProxySQL(config DBConfig, hostname string, hostgroupID int, port int) error {
+	proxysqlDB, err := ConnectToProxysqlDB(config)
+	if err != nil {
+		return fmt.Errorf("failed to connect to ProxySQL: %w", err)
+	}
+	defer proxysqlDB.Close()
+
+	// Check if server already exists in this hostgroup
+	var count int
+	checkQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_servers WHERE hostgroup_id = %d AND hostname = '%s' AND port = %d", hostgroupID, hostname, port)
+	err = proxysqlDB.QueryRow(checkQuery).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check existing server: %w", err)
+	}
+
+	if count == 0 {
+		// Insert new server
+		insertQuery := fmt.Sprintf("INSERT INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (%d, '%s', %d)", hostgroupID, hostname, port)
+		_, err = proxysqlDB.Exec(insertQuery)
+		if err != nil {
+			return fmt.Errorf("failed to insert server: %w", err)
+		}
+		log.Printf("Registered new ProxySQL server: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
+	} else {
+		log.Printf("ProxySQL server already exists: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
+	}
+
+	// Load and save to persist changes
+	_, err = proxysqlDB.Exec("LOAD PGSQL SERVERS TO RUNTIME")
+	if err != nil {
+		return fmt.Errorf("failed to load servers to runtime: %w", err)
+	}
+	_, err = proxysqlDB.Exec("SAVE PGSQL SERVERS TO DISK")
+	if err != nil {
+		return fmt.Errorf("failed to save servers to disk: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveHostFromProxySQL removes a database host from ProxySQL pgsql_servers table
+func RemoveHostFromProxySQL(config DBConfig, hostname string, hostgroupID int, port int) error {
+	proxysqlDB, err := ConnectToProxysqlDB(config)
+	if err != nil {
+		return fmt.Errorf("failed to connect to ProxySQL: %w", err)
+	}
+	defer proxysqlDB.Close()
+
+	deleteQuery := fmt.Sprintf("DELETE FROM pgsql_servers WHERE hostgroup_id = %d AND hostname = '%s' AND port = %d", hostgroupID, hostname, port)
+	_, err = proxysqlDB.Exec(deleteQuery)
+	if err != nil {
+		return fmt.Errorf("failed to delete server: %w", err)
+	}
+
+	log.Printf("Removed ProxySQL server: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
+
+	// Load and save to persist changes
+	_, err = proxysqlDB.Exec("LOAD PGSQL SERVERS TO RUNTIME")
+	if err != nil {
+		return fmt.Errorf("failed to load servers to runtime: %w", err)
+	}
+	_, err = proxysqlDB.Exec("SAVE PGSQL SERVERS TO DISK")
+	if err != nil {
+		return fmt.Errorf("failed to save servers to disk: %w", err)
+	}
+
+	return nil
+}
+
+// ListProxySQLServers lists all registered servers in ProxySQL
+func ListProxySQLServers(config DBConfig) ([]map[string]interface{}, error) {
+	proxysqlDB, err := ConnectToProxysqlDB(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to ProxySQL: %w", err)
+	}
+	defer proxysqlDB.Close()
+
+	rows, err := proxysqlDB.Query("SELECT hostgroup_id, hostname, port, status, weight FROM pgsql_servers")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query servers: %w", err)
+	}
+	defer rows.Close()
+
+	var servers []map[string]interface{}
+	for rows.Next() {
+		var hostgroupID int
+		var hostname string
+		var port int
+		var status string
+		var weight int
+		err = rows.Scan(&hostgroupID, &hostname, &port, &status, &weight)
+		if err != nil {
+			continue
+		}
+		servers = append(servers, map[string]interface{}{
+			"hostgroup_id": hostgroupID,
+			"hostname":     hostname,
+			"port":         port,
+			"status":       status,
+			"weight":       weight,
+		})
+	}
+
+	return servers, nil
 }
 
 // checks if a given database is a system default database
