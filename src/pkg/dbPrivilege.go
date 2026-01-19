@@ -76,6 +76,8 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 			"role":         role,
 			"privilege":    privileges,
 			"instanceId":   instanceId,
+			"agentVmIp":    config.AgentVMIP, // Multi-host: Agent VM IP (where ProxySQL runs)
+			"hostVmIp":     config.Host,      // Multi-host: Database host VM IP
 		}
 
 		userPayloadBytes, err := json.Marshal(userPayload)
