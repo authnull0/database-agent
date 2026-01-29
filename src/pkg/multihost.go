@@ -10,17 +10,6 @@ import (
 )
 
 // HostConfig represents a single database host configuration
-type HostConfig struct {
-	HostVMIP string `json:"host_vm_ip"`
-	Port     string `json:"port"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-// HostsFile represents the structure of db_hosts.json
-type HostsFile struct {
-	Hosts []HostConfig `json:"hosts"`
-}
 
 // LoadHostsFromFile loads multiple host configurations from a JSON file
 func LoadHostsFromFile(filePath string) ([]HostConfig, error) {

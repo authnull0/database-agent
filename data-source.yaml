@@ -1,0 +1,11 @@
+databases:
+  - host: 1.1.1.1
+    type: postgres
+    port: 5432
+    username: root
+    password: ENC(U2FsdGVkX1/ve6HWzOxRUVKzViba+5i6lDKhHHiQoXs=)
+  - host: 127.0.0.1
+    type: postgres
+    port: 5432
+    username: saf
+    password: ENC(U2FsdGVkX18OmU8Mx4w7wjICtEAPYszFIZmmtOwJ0u8=)

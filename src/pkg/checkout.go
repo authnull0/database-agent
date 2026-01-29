@@ -60,10 +60,10 @@ type JobQueue struct {
 	Privileges    string    `gorm:"column:privileges"`
 	UpdatedAt     time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
 	CreatedAt     time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
-	AgentVMIP     string    `gorm:"column:agent_vm_ip" json:"agent_vm_ip"`         // Multi-host: Agent VM IP
-	HostVMIP      string    `gorm:"column:host_vm_ip" json:"host_vm_ip"`           // Multi-host: Database host VM IP
-	HostgroupID   int       `gorm:"column:hostgroup_id" json:"hostgroup_id"`       // Multi-host: ProxySQL hostgroup ID
-	DefaultSchema string    `gorm:"column:default_schema" json:"default_schema"`   // Multi-host: ProxySQL default schema (database name)
+	AgentVMIP     string    `gorm:"column:agent_vm_ip" json:"agent_vm_ip"`       // Multi-host: Agent VM IP
+	HostVMIP      string    `gorm:"column:host_vm_ip" json:"host_vm_ip"`         // Multi-host: Database host VM IP
+	HostgroupID   int       `gorm:"column:hostgroup_id" json:"hostgroup_id"`     // Multi-host: ProxySQL hostgroup ID
+	DefaultSchema string    `gorm:"column:default_schema" json:"default_schema"` // Multi-host: ProxySQL default schema (database name)
 }
 type CreateDatabaseCredentialRequestDto struct {
 	OrgId          int                 `json:"orgId"`
@@ -126,7 +126,7 @@ type Permission struct{}     // Placeholder for missing struct
 func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 
 	//API call to get all jobs from the queue
-	url := "https://prod.api.authnull.com/api/v1/databaseService/getJobQueue"
+	url := "https://dev.api.authnull.com/api/v1/databaseService/getJobQueue"
 	orgID, _ := strconv.Atoi(Config.OrgID)
 	tenantID, _ := strconv.Atoi(Config.TenantID)
 
@@ -213,7 +213,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 		if success {
 			log.Printf("Credentials generated successfully for job: %s", job.JobName)
 			//Call Update Job API to update the job status to completed
-			updateJobURL := "https://prod.api.authnull.com/api/v1/databaseService/updateQueue"
+			updateJobURL := "https://dev.api.authnull.com/api/v1/databaseService/updateQueue"
 			updateJobPayload := map[string]interface{}{
 				"org_id":    orgID,
 				"tenant_id": tenantID,
@@ -253,7 +253,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 }
 
 func FetchPolicyDetails(orgID int, tenantID int, policyID uuid.UUID) (*GetPolicyDetailsResponse, error) {
-	url := "https://prod.api.authnull.com/api/v1/policyService/getPolicyDetails"
+	url := "https://dev.api.authnull.com/api/v1/policyService/getPolicyDetails"
 
 	payload := GetPolicyDetails{
 		OrgId:    orgID,
@@ -582,7 +582,7 @@ func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCre
 		return 0, errors.New("failed to marshal request body: " + err.Error())
 	}
 	log.Default().Println("Successfully Marshalled Request Body")
-	url := "https://prod.api.authnull.com/api/v1/credential/createDatabaseCredential"
+	url := "https://dev.api.authnull.com/api/v1/credential/createDatabaseCredential"
 	log.Default().Println("URL", url)
 	//Create the request
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(databaseCredentialRequestBytes))
@@ -632,7 +632,7 @@ func CallPolicyCredentialMapping(orgId int, policyId uuid.UUID, tenantId int, cr
 	}
 	log.Default().Println(string(jsonData))
 	client := &http.Client{}
-	url := "https://prod.api.authnull.com/api/v1/policyService/updatePolicyCredentialMapping"
+	url := "https://dev.api.authnull.com/api/v1/policyService/updatePolicyCredentialMapping"
 	log.Default().Println("URL", url)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {

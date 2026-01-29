@@ -26,13 +26,13 @@ type InstanceCreatedResponse struct {
 
 // DatabaseHost represents a database host configuration for multi-host support
 type DatabaseHost struct {
-	HostID      int    `json:"host_id"`       // Host ID from database
-	AgentVMIP   string `json:"agent_vm_ip"`   // IP of the agent/proxysql VM
-	HostVMIP    string `json:"host_vm_ip"`    // IP of the actual database host
-	HostgroupID int    `json:"hostgroup_id"`  // ProxySQL hostgroup ID
-	Port        int    `json:"port"`          // Database port
-	DBType      string `json:"db_type"`       // Database type (postgres, mysql, etc.)
-	Status      string `json:"status"`        // Host status (active, inactive)
+	HostID      int    `json:"host_id"`      // Host ID from database
+	AgentVMIP   string `json:"agent_vm_ip"`  // IP of the agent/proxysql VM
+	HostVMIP    string `json:"host_vm_ip"`   // IP of the actual database host
+	HostgroupID int    `json:"hostgroup_id"` // ProxySQL hostgroup ID
+	Port        int    `json:"port"`         // Database port
+	DBType      string `json:"db_type"`      // Database type (postgres, mysql, etc.)
+	Status      string `json:"status"`       // Host status (active, inactive)
 }
 
 // DatabaseHostsResponse contains the response from get hosts API
@@ -41,4 +41,28 @@ type DatabaseHostsResponse struct {
 	Status  string         `json:"status"`
 	Message string         `json:"message"`
 	Data    []DatabaseHost `json:"data"`
+}
+type HostConfig struct {
+	Id       int    `json:"id"`
+	HostVMIP string `json:"host_vm_ip"`
+	Port     string `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// HostsFile represents the structure of db_hosts.json
+type HostsFile struct {
+	Hosts []HostConfig `json:"hosts"`
+}
+
+type DataSourceConfig struct {
+	Databases []Databases `mapstructure:"databases"`
+}
+
+type Databases struct {
+	Host     string `mapstructure:"host"`
+	Type     string `mapstructure:"type"`
+	Port     string `mapstructure:"port"`
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"` // encrypted
 }
