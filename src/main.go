@@ -90,6 +90,7 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 	var err error
 	var timeInterval int
 	var conn *sql.DB
+	var cfg pkg.DBConfig
 	config, err = loadConfig("./")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -110,8 +111,16 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 		log.Fatal("No databases configured")
 	}
 
+	// Hold all active DB connections
+	type DBHandle struct {
+		Conn *sql.DB
+		Cfg  pkg.DBConfig
+	}
+
+	var dbHandles []DBHandle
+
 	for _, db := range dsCfg.Databases {
-		log.Printf("Connecting to %s:%d", db.Host, db.Port)
+		log.Printf("Connecting to %s:%s", db.Host, db.Port)
 
 		password, err := utils.DecryptPassword(db.Password, config.Key)
 		if err != nil {
@@ -119,12 +128,17 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 			continue
 		}
 
-		cfg := pkg.DBConfig{
-			Host:     db.Host,
-			User:     db.Username,
-			Password: password,
-			Port:     db.Port,
-			DBType:   db.Type,
+		cfg = pkg.DBConfig{
+			OrgID:      config.OrgID,
+			TenantID:   config.TenantID,
+			MachineKey: config.MachineKey,
+			Key:        config.Key,
+			Host:       db.Host,
+			API:        config.API,
+			User:       db.Username,
+			Password:   password,
+			Port:       db.Port,
+			DBType:     db.Type,
 		}
 
 		conn, err = pkg.ConnectToDB(cfg)
@@ -134,8 +148,13 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 		}
 
 		log.Printf("Connected successfully to %s", db.Host)
+		dbHandles = append(dbHandles, DBHandle{Conn: conn, Cfg: cfg})
 
 	}
+	if len(dbHandles) == 0 {
+		log.Fatal("No database connections could be established")
+	}
+
 	// Initialize ProxySQL with one-time setup queries
 	log.Default().Printf("Initializing ProxySQL...")
 	if err := pkg.InitializeProxySQL(config); err != nil {
@@ -152,13 +171,19 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 		case <-ticker.C:
 			log.Default().Println("DB Synchronization Started...")
 
-			// Fall back to single-host mode
-			err = pkg.FetchDatabaseDetails(conn, config)
-			if err != nil {
-				log.Printf("Failed to fetch database details: %v", err)
+			for _, h := range dbHandles {
+				log.Printf("Syncing database %s", h.Cfg.Host)
+
+				if err := pkg.FetchDatabaseDetails(h.Conn, h.Cfg); err != nil {
+					log.Printf("Sync failed for %s: %v", h.Cfg.Host, err)
+				}
 			}
+			log.Default().Println("DB Synchronization Completed.")
 		case <-exit:
 			log.Println("Stopping agent...")
+			for _, h := range dbHandles {
+				h.Conn.Close()
+			}
 			return
 		}
 	}
