@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/authnull0/database-agent/src/pkg"
+	"github.com/authnull0/database-agent/utils"
 	_ "github.com/denisenkom/go-mssqldb"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/kardianos/service"
@@ -65,12 +67,30 @@ func loadConfig(path string) (pkg.DBConfig, error) {
 	return config, err
 }
 
+// LoadDataSource loads the data-source.yaml configuration file
+func LoadDataSource() (pkg.DataSourceConfig, error) {
+	viper.Reset()
+	viper.SetConfigName("data-source")
+	viper.SetConfigType("yaml")
+	viper.AddConfigPath(".")
+
+	if err := viper.ReadInConfig(); err != nil {
+		return pkg.DataSourceConfig{}, err
+	}
+
+	var ds pkg.DataSourceConfig
+	err := viper.Unmarshal(&ds)
+	return ds, err
+}
+
 func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost string) {
 	fmt.Println("Starting Authnull Database Agent...")
 
 	// Load the configuration
 	var err error
 	var timeInterval int
+	var conn *sql.DB
+	var cfg pkg.DBConfig
 	config, err = loadConfig("./")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -82,32 +102,58 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 	if err != nil {
 		log.Default().Println(err)
 	}
-
-	// Check for multi-host mode
-	hostsFilePath := "./db_hosts.json"
-	isMultiHost := false
-
-	// Try to detect multi-host mode
-	if config.AgentVMIP != "" {
-		log.Printf("Agent VM IP configured: %s - checking for multi-host mode", config.AgentVMIP)
-		// Try to load and process multiple hosts
-		err = pkg.ProcessMultipleHosts(config, hostsFilePath)
-		if err == nil {
-			isMultiHost = true
-			log.Printf("Multi-host mode initialized successfully")
-		}
-	}
-
-	// Connect to the primary database (from db.env)
-	log.Default().Printf("Trying to connect to primary database..")
-	db, err := pkg.ConnectToDB(config)
+	dsCfg, err := LoadDataSource()
 	if err != nil {
-		log.Fatalf("Failed to connect to DB: %v", err)
-		fmt.Printf("Failed to connect to DB: %v", err)
-		//      os.Exit(1)
+		log.Fatalf("Failed to load data-source.yaml: %v", err)
 	}
-	// log.Default().Printf("Database connection establised successfully..")
-	defer db.Close()
+
+	if len(dsCfg.Databases) == 0 {
+		log.Fatal("No databases configured")
+	}
+
+	// Hold all active DB connections
+	type DBHandle struct {
+		Conn *sql.DB
+		Cfg  pkg.DBConfig
+	}
+
+	var dbHandles []DBHandle
+
+	for _, db := range dsCfg.Databases {
+		log.Printf("Connecting to %s:%s", db.Host, db.Port)
+
+		password, err := utils.DecryptPassword(db.Password, config.Key)
+		if err != nil {
+			log.Printf("Password decrypt failed for %s: %v", db.Host, err)
+			continue
+		}
+
+		cfg = pkg.DBConfig{
+			OrgID:      config.OrgID,
+			TenantID:   config.TenantID,
+			MachineKey: config.MachineKey,
+			Key:        config.Key,
+			Host:       db.Host,
+			API:        config.API,
+			User:       db.Username,
+			Password:   password,
+			Port:       db.Port,
+			DBType:     db.Type,
+		}
+
+		conn, err = pkg.ConnectToDB(cfg)
+		if err != nil {
+			log.Printf("DB connection failed %s: %v", db.Host, err)
+			continue
+		}
+
+		log.Printf("Connected successfully to %s", db.Host)
+		dbHandles = append(dbHandles, DBHandle{Conn: conn, Cfg: cfg})
+
+	}
+	if len(dbHandles) == 0 {
+		log.Fatal("No database connections could be established")
+	}
 
 	// Initialize ProxySQL with one-time setup queries
 	log.Default().Printf("Initializing ProxySQL...")
@@ -125,21 +171,19 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 		case <-ticker.C:
 			log.Default().Println("DB Synchronization Started...")
 
-			// Try multi-host sync first
-			if isMultiHost {
-				if pkg.SyncMultipleHosts(config, hostsFilePath) {
-					log.Default().Println("Multi-host sync completed")
-					continue // Skip single-host sync if multi-host succeeded
+			for _, h := range dbHandles {
+				log.Printf("Syncing database %s", h.Cfg.Host)
+
+				if err := pkg.FetchDatabaseDetails(h.Conn, h.Cfg); err != nil {
+					log.Printf("Sync failed for %s: %v", h.Cfg.Host, err)
 				}
 			}
-
-			// Fall back to single-host mode
-			err = pkg.FetchDatabaseDetails(db, config)
-			if err != nil {
-				log.Printf("Failed to fetch database details: %v", err)
-			}
+			log.Default().Println("DB Synchronization Completed.")
 		case <-exit:
 			log.Println("Stopping agent...")
+			for _, h := range dbHandles {
+				h.Conn.Close()
+			}
 			return
 		}
 	}

@@ -222,6 +222,9 @@ func isSystemDatabase(dbName, dbType string) bool {
 // FetchDatabaseDetails fetches the database names, statuses, and table privileges
 // skipping system databases
 func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
+	log.Println("Fetching database details...")
+	log.Default().Printf("%v", config)
+
 	var databases []string
 
 	// PostgreSQL query to list databases

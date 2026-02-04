@@ -60,10 +60,10 @@ type JobQueue struct {
 	Privileges    string    `gorm:"column:privileges"`
 	UpdatedAt     time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
 	CreatedAt     time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
-	AgentVMIP     string    `gorm:"column:agent_vm_ip" json:"agent_vm_ip"`         // Multi-host: Agent VM IP
-	HostVMIP      string    `gorm:"column:host_vm_ip" json:"host_vm_ip"`           // Multi-host: Database host VM IP
-	HostgroupID   int       `gorm:"column:hostgroup_id" json:"hostgroup_id"`       // Multi-host: ProxySQL hostgroup ID
-	DefaultSchema string    `gorm:"column:default_schema" json:"default_schema"`   // Multi-host: ProxySQL default schema (database name)
+	AgentVMIP     string    `gorm:"column:agent_vm_ip" json:"agent_vm_ip"`       // Multi-host: Agent VM IP
+	HostVMIP      string    `gorm:"column:host_vm_ip" json:"host_vm_ip"`         // Multi-host: Database host VM IP
+	HostgroupID   int       `gorm:"column:hostgroup_id" json:"hostgroup_id"`     // Multi-host: ProxySQL hostgroup ID
+	DefaultSchema string    `gorm:"column:default_schema" json:"default_schema"` // Multi-host: ProxySQL default schema (database name)
 }
 type CreateDatabaseCredentialRequestDto struct {
 	OrgId          int                 `json:"orgId"`
@@ -127,6 +127,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 
 	//API call to get all jobs from the queue
 	url := "https://prod.api.authnull.com/api/v1/databaseService/getJobQueue"
+
 	orgID, _ := strconv.Atoi(Config.OrgID)
 	tenantID, _ := strconv.Atoi(Config.TenantID)
 
