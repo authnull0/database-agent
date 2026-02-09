@@ -96,6 +96,8 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 		"databaseName": dbName,
 		"tables":       tables,
 		"instanceId":   instanceId,
+		"host":         config.Host,      // Database host VM IP
+		"agentVmIp":    config.AgentVMIP, // Agent VM IP (where ProxySQL runs)
 	}
 
 	log.Printf("Payload created for %s: %+v", dbName, payload)

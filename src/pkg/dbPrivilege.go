@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
+
+	"github.com/authnull0/database-agent/utils"
 )
 
 // FetchTablePrivileges fetches the privileges for users at the database level for PostgreSQL
@@ -15,6 +18,12 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 	var query string
 	orgID, _ := strconv.Atoi(config.OrgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
+
+	// Get the public IP of the agent VM (for legacy mode fallback)
+	publicIP, err := utils.GetPublicIP()
+	if err != nil {
+		fmt.Println("Failed to get PublicIp Address", err)
+	}
 
 	// PostgreSQL uses different system catalogs for privilege information
 	query = `
@@ -76,8 +85,8 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 			"role":         role,
 			"privilege":    privileges,
 			"instanceId":   instanceId,
-			"agentVmIp":    config.AgentVMIP, // Multi-host: Agent VM IP (where ProxySQL runs)
-			"hostVmIp":     config.Host,      // Multi-host: Database host VM IP
+			"agentVmIp":    publicIP,    // Multi-host: Agent VM IP (where ProxySQL runs)
+			"hostVmIp":     config.Host, // Multi-host: Database host VM IP
 		}
 
 		userPayloadBytes, err := json.Marshal(userPayload)

@@ -15,8 +15,9 @@ import (
 )
 
 // FetchDatabaseStatus fetches the status of a PostgreSQL database
-func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId string) error {
+func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId string) (int, error) {
 	var query string
+	var data DbSyncResponse
 
 	orgID, _ := strconv.Atoi(config.OrgID)
 	log.Printf("Org Id: %d", orgID)
@@ -72,8 +73,8 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 		"databaseType": "postgres",
 		"databaseName": dbName,
 		"port":         config.Port,
-		"host":         hostIP,        // Host VM IP (where database runs)
-		"agentVmIp":    agentVMIP,     // Agent VM IP (where proxysql runs)
+		"host":         hostIP,    // Host VM IP (where database runs)
+		"agentVmIp":    agentVMIP, // Agent VM IP (where proxysql runs)
 		"status":       status,
 		"uuid":         config.Key,
 		"instanceId":   instanceId,
@@ -106,5 +107,18 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 		log.Printf("Error while reading response body: %v", err)
 	}
 	log.Default().Printf("Response from external service: %v", string(body))
-	return nil
+
+	errMarsh := json.Unmarshal([]byte(string(body)), &data)
+
+	if errMarsh != nil {
+		log.Println("UnMarshalling Error !", errMarsh)
+	}
+
+	log.Default().Println("DbSync Response", string(body), data.HostGroupId, data.Code)
+
+	log.Default().Println("Printing Data Obj ", data)
+
+	hostGroupId := data.HostGroupId
+	log.Default().Println("Database Synchronized with host group Id:", hostGroupId)
+	return hostGroupId, nil
 }
