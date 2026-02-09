@@ -76,7 +76,7 @@ func RegisterHostInProxySQL(config DBConfig, hostname string, hostgroupID int, p
 
 	// Check if server already exists in this hostgroup
 	var count int
-	checkQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_servers WHERE hostgroup_id = %d AND hostname = '%s' AND port = %d", hostgroupID, hostname, port)
+	checkQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_servers WHERE hostname = '%s' AND port = %d", hostname, port)
 	err = proxysqlDB.QueryRow(checkQuery).Scan(&count)
 	if err != nil {
 		return fmt.Errorf("failed to check existing server: %w", err)
@@ -91,7 +91,19 @@ func RegisterHostInProxySQL(config DBConfig, hostname string, hostgroupID int, p
 		}
 		log.Printf("Registered new ProxySQL server: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
 	} else {
-		log.Printf("ProxySQL server already exists: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
+		//Delete existing server with host group id 0 if exists
+		deleteQuery := fmt.Sprintf("DELETE FROM pgsql_servers WHERE hostname = '%s' AND port = %d", hostname, port)
+		_, err = proxysqlDB.Exec(deleteQuery)
+		if err != nil {
+			return fmt.Errorf("failed to delete server: %w", err)
+		}
+		// Insert server with new host group id
+		insertQuery := fmt.Sprintf("INSERT INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (%d, '%s', %d)", hostgroupID, hostname, port)
+		_, err = proxysqlDB.Exec(insertQuery)
+		if err != nil {
+			return fmt.Errorf("failed to insert server: %w", err)
+		}
+		log.Printf("ProxySQL server registered after deleting the existing one: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
 	}
 
 	// Load and save to persist changes
