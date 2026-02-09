@@ -115,7 +115,7 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		if err != nil {
 			log.Printf("Failed to update host in ProxySQL for database %s: %v", dbName, err)
 		}
-
+		log.Println("UpdateHostInProxySQL completed")
 		// Fetch tables and privileges for each database
 		err = FetchTablePrivileges(db, dbName, config, instanceId)
 		if err != nil {
