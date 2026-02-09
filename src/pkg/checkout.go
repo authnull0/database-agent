@@ -30,17 +30,19 @@ type CreateDatabaseCredentialResponseDto struct {
 }
 
 type GetAllJobQueueRequest struct {
-	OrgID    int    `json:"org_id"`
-	TenantID int    `json:"tenant_id"`
-	Host     string `json:"host"`
-	DbName   string `json:"db_name"`
+	OrgID     int    `json:"org_id"`
+	TenantID  int    `json:"tenant_id"`
+	Host      string `json:"host"`
+	DbName    string `json:"db_name"`
+	AgentVMIP string `json:"agent_vm_ip"` // Multi-host: Agent VM IP
 }
 type GetAllJobQueueResponse struct {
-	Code       string     `json:"code"`
-	Status     string     `json:"status"`
-	Message    string     `json:"message"`
-	DbUserName string     `json:"db_user_name"`
-	Data       []JobQueue `json:"data"`
+	Code        string     `json:"code"`
+	Status      string     `json:"status"`
+	Message     string     `json:"message"`
+	DbUserName  string     `json:"db_user_name"`
+	HostGroupId int        `json:"hostgroup_id"`
+	Data        []JobQueue `json:"data"`
 }
 type JobQueue struct {
 	PolicyID      uuid.UUID `gorm:"primaryKey;column:id"`
@@ -138,10 +140,12 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 	}
 	log.Default().Println("IP Address:", ipAddr)
 	payload := GetAllJobQueueRequest{
-		OrgID:    orgID,
-		TenantID: tenantID,
-		Host:     ipAddr,
-		DbName:   dbName,
+		OrgID:     orgID,
+		TenantID:  tenantID,
+		Host:      Config.Host,
+		DbName:    dbName,
+		AgentVMIP: ipAddr, // Multi-host: Agent VM IP
+
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -206,7 +210,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 		}
 		success, err := GenerateCredentials(db, Config, dbName, response.DbUserName, job.Host,
 			job.WalletUserID, job.IssuerID, job.Table_Name, job.Fields, job.Privileges, job.DbUserID,
-			job.PolicyID, policyDetails, job.HostgroupID, defaultSchema)
+			job.PolicyID, policyDetails, response.HostGroupId)
 		if err != nil {
 			log.Printf("Error while generating credentials: %v", err)
 			continue
@@ -336,7 +340,7 @@ func EncryptAES(plaintext string, key []byte) (string, error) {
 
 func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string,
 	WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string, DbUserID int,
-	policyID uuid.UUID, policyDetails *GetPolicyDetailsResponse, hostgroupID int, defaultSchema string) (bool, error) {
+	policyID uuid.UUID, policyDetails *GetPolicyDetailsResponse, hostgroupID int) (bool, error) {
 
 	// Validate policy details
 	if policyDetails == nil {
@@ -368,32 +372,10 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		return false, err
 	}
 
-	if userExists > 0 {
-		// User exists, let's get the password
-		var existingPassword string
-		checkExistingPasswordQuery := fmt.Sprintf("SELECT password FROM pgsql_users WHERE username = '%s'", dbUserName)
-		err = proxySQLDB.QueryRow(checkExistingPasswordQuery).Scan(&existingPassword)
-		if err != nil {
-			log.Printf("Error retrieving password for user %s: %v", dbUserName, err)
-			return false, err
-		}
-
-		if existingPassword != "" {
-			log.Printf("Existing password found for user %s, skipping password rotation", dbUserName)
-			password = existingPassword
-		} else {
-			log.Printf("User exists but has empty password, generating new one")
-			password, err = GenerateRandomPassword(16)
-			if err != nil {
-				return false, err
-			}
-		}
-	} else {
-		// User doesn't exist, generate new password
-		password, err = GenerateRandomPassword(16)
-		if err != nil {
-			return false, err
-		}
+	// Generate new password for each checkout - even if user exists, to ensure password is updated
+	password, err = GenerateRandomPassword(16)
+	if err != nil {
+		return false, err
 	}
 
 	// PostgreSQL conversion: Check if user exists
@@ -451,25 +433,19 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 
 	if userCount2 == 0 {
 		// Create the user if it does not exist
-		// Include default_hostgroup and default_schema for multi-host routing
+		// Include default_hostgroup for multi-host routing
 		var createUserQuery string
-		if hostgroupID > 0 && defaultSchema != "" {
-			createUserQuery = fmt.Sprintf("INSERT INTO pgsql_users (username, password, default_hostgroup, default_schema, active, use_ssl) VALUES ('%s', '%s', %d, '%s', 1, 0)", dbUserName, password, hostgroupID, defaultSchema)
-		} else if hostgroupID > 0 {
-			createUserQuery = fmt.Sprintf("INSERT INTO pgsql_users (username, password, default_hostgroup, active, use_ssl) VALUES ('%s', '%s', %d, 1, 0)", dbUserName, password, hostgroupID)
-		} else {
-			// Legacy mode: no hostgroup specified
-			createUserQuery = fmt.Sprintf("INSERT INTO pgsql_users (username, password, active, use_ssl) VALUES ('%s', '%s', 1, 0)", dbUserName, password)
-		}
+		createUserQuery = fmt.Sprintf("INSERT INTO pgsql_users (username, password, default_hostgroup, active, use_ssl) VALUES ('%s', '%s', %d, 1, 0)", dbUserName, password, hostgroupID)
+
 		_, err = proxySQLDB.Exec(createUserQuery)
 
 		if err != nil {
 			log.Printf("Error while creating user %s in ProxySQL: %v", dbUserName, err)
 			return false, err
 		}
-		log.Printf("User %s created successfully in ProxySQL with hostgroup=%d, schema=%s", dbUserName, hostgroupID, defaultSchema)
+		log.Printf("User %s created successfully in ProxySQL with hostgroup=%d", dbUserName, hostgroupID)
 	} else {
-		// User exists, update hostgroup and schema if provided
+		// User exists, update hostgroup if provided
 		if hostgroupID > 0 {
 			updateHostgroupQuery := fmt.Sprintf("UPDATE pgsql_users SET default_hostgroup = %d WHERE username = '%s'", hostgroupID, dbUserName)
 			_, err = proxySQLDB.Exec(updateHostgroupQuery)
@@ -477,14 +453,6 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 				log.Printf("Error updating hostgroup for user %s: %v", dbUserName, err)
 			}
 		}
-		if defaultSchema != "" {
-			updateSchemaQuery := fmt.Sprintf("UPDATE pgsql_users SET default_schema = '%s' WHERE username = '%s'", defaultSchema, dbUserName)
-			_, err = proxySQLDB.Exec(updateSchemaQuery)
-			if err != nil {
-				log.Printf("Error updating default_schema for user %s: %v", dbUserName, err)
-			}
-		}
-		log.Printf("User %s already exists in ProxySQL, updated hostgroup=%d, schema=%s", dbUserName, hostgroupID, defaultSchema)
 	}
 
 	// Update the password for the user in ProxySQL

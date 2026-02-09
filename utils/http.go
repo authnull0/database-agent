@@ -48,6 +48,6 @@ func DecryptPassword(enc, key string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("openssl decrypt failed: %v: %s", err, out)
 	}
-	log.Printf("Decrypted password: %s", out)
+	//log.Printf("Decrypted password: %s", out)
 	return strings.TrimSpace(string(out)), nil
 }

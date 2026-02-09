@@ -66,3 +66,8 @@ type Databases struct {
 	Username string `mapstructure:"username"`
 	Password string `mapstructure:"password"` // encrypted
 }
+type DbSyncResponse struct {
+	HostGroupId int    `json:"hostgroup_id"` // Database HostGroup ID
+	Code        int    `json:"code"`         // Response code
+	Message     string `json:"message"`      // Response message
+}

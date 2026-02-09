@@ -37,7 +37,7 @@ func (p *program) Start(s service.Service) error {
 }
 
 func (p *program) Run() {
-	startAgent(p.exit, p.dbUserName, p.dbPassword, p.dbHost)
+	startAgent(p.exit)
 }
 
 func (p *program) Stop(s service.Service) error {
@@ -83,7 +83,7 @@ func LoadDataSource() (pkg.DataSourceConfig, error) {
 	return ds, err
 }
 
-func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost string) {
+func startAgent(exit chan struct{}) {
 	fmt.Println("Starting Authnull Database Agent...")
 
 	// Load the configuration
@@ -148,18 +148,19 @@ func startAgent(exit chan struct{}, dbUserName string, dbPassword string, dbHost
 		}
 
 		log.Printf("Connected successfully to %s", db.Host)
+
+		// Initialize ProxySQL with host group 0 for first time
+		log.Default().Printf("Initializing ProxySQL...")
+		if err := pkg.InitializeProxySQL(cfg, 0); err != nil {
+			log.Printf("Warning: ProxySQL initialization failed: %v", err)
+			// Continue anyway - ProxySQL might not be available or already initialized
+		}
+
 		dbHandles = append(dbHandles, DBHandle{Conn: conn, Cfg: cfg})
 
 	}
 	if len(dbHandles) == 0 {
 		log.Fatal("No database connections could be established")
-	}
-
-	// Initialize ProxySQL with one-time setup queries
-	log.Default().Printf("Initializing ProxySQL...")
-	if err := pkg.InitializeProxySQL(config); err != nil {
-		log.Printf("Warning: ProxySQL initialization failed: %v", err)
-		// Continue anyway - ProxySQL might not be available or already initialized
 	}
 
 	// Ticker to run the synchronization every minute
@@ -226,6 +227,6 @@ func main() {
 		close(exit)
 	}()
 
-	startAgent(exit, config.Host, config.User, config.Password)
+	startAgent(exit)
 
 }
