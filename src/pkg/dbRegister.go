@@ -16,7 +16,7 @@ import (
 
 // RegisterAgent registers the database agent with the central service
 // Compatible with both MySQL and PostgreSQL
-func RegisterAgent(db *sql.DB, dbName string, config DBConfig) string {
+func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) {
 
 	orgID, _ := strconv.Atoi(config.OrgID)
 	log.Printf("Org Id: %d", orgID)
@@ -95,9 +95,10 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) string {
 	fmt.Println("Printing Data Obj ", data)
 
 	instanceId := data.InstanceId
+	agentStatus := data.AgentStatus
 	fmt.Println("Instance Id returned from register:", instanceId)
 	// NB: instance ID is the machine_id of epm_machines table.
-	return instanceId
+	return instanceId, agentStatus
 }
 
 // LastActive updates the last active time of the database agent

@@ -19,9 +19,10 @@ type DBConfig struct {
 
 // InstanceCreatedResponse contains the response from the register agent API
 type InstanceCreatedResponse struct {
-	InstanceId string // Database instance ID
-	Code       string // Response code
-	Message    string // Response message
+	InstanceId  string // Database instance ID
+	AgentStatus string // Agent status (e.g., "ACTIVE/INACTIVE/DELETED")
+	Code        string // Response code
+	Message     string // Response message
 }
 
 // DatabaseHost represents a database host configuration for multi-host support
@@ -67,7 +68,8 @@ type Databases struct {
 	Password string `mapstructure:"password"` // encrypted
 }
 type DbSyncResponse struct {
-	HostGroupId int    `json:"hostgroup_id"` // Database HostGroup ID
-	Code        int    `json:"code"`         // Response code
-	Message     string `json:"message"`      // Response message
+	HostGroupId    int    `json:"hostgroup_id"`    // Database HostGroup ID
+	Code           int    `json:"code"`            // Response code
+	Message        string `json:"message"`         // Response message
+	DatabaseStatus string `json:"database_status"` // Database status (active, inactive, deleted)
 }
