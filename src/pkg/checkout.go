@@ -374,8 +374,27 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 
 	// If the user and password exist, we can skip password generation and just update the hostgroup if needed
 	if userExists > 0 {
-		log.Printf("User %s already exists in ProxySQL, skipping password generation", dbUserName)
+		// User exists, let's get the password
+		var existingPassword string
+		checkExistingPasswordQuery := fmt.Sprintf("SELECT password FROM pgsql_users WHERE username = '%s'", dbUserName)
+		err = proxySQLDB.QueryRow(checkExistingPasswordQuery).Scan(&existingPassword)
+		if err != nil {
+			log.Printf("Error retrieving password for user %s: %v", dbUserName, err)
+			return false, err
+		}
+
+		if existingPassword != "" {
+			log.Printf("Existing password found for user %s, skipping password rotation", dbUserName)
+			password = existingPassword
+		} else {
+			log.Printf("User exists but has empty password, generating new one")
+			password, err = GenerateRandomPassword(16)
+			if err != nil {
+				return false, err
+			}
+		}
 	} else {
+		// User doesn't exist, generate new password
 		password, err = GenerateRandomPassword(16)
 		if err != nil {
 			return false, err
