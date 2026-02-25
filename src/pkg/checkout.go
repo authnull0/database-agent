@@ -372,10 +372,33 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		return false, err
 	}
 
-	// Generate new password for each checkout - even if user exists, to ensure password is updated
-	password, err = GenerateRandomPassword(16)
-	if err != nil {
-		return false, err
+	// If the user and password exist, we can skip password generation and just update the hostgroup if needed
+	if userExists > 0 {
+		// User exists, let's get the password
+		var existingPassword string
+		checkExistingPasswordQuery := fmt.Sprintf("SELECT password FROM pgsql_users WHERE username = '%s'", dbUserName)
+		err = proxySQLDB.QueryRow(checkExistingPasswordQuery).Scan(&existingPassword)
+		if err != nil {
+			log.Printf("Error retrieving password for user %s: %v", dbUserName, err)
+			return false, err
+		}
+
+		if existingPassword != "" {
+			log.Printf("Existing password found for user %s, skipping password rotation", dbUserName)
+			password = existingPassword
+		} else {
+			log.Printf("User exists but has empty password, generating new one")
+			password, err = GenerateRandomPassword(16)
+			if err != nil {
+				return false, err
+			}
+		}
+	} else {
+		// User doesn't exist, generate new password
+		password, err = GenerateRandomPassword(16)
+		if err != nil {
+			return false, err
+		}
 	}
 
 	// PostgreSQL conversion: Check if user exists

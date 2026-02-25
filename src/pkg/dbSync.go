@@ -15,7 +15,7 @@ import (
 )
 
 // FetchDatabaseStatus fetches the status of a PostgreSQL database
-func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId string) (int, error) {
+func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId string) (int, string, error) {
 	var query string
 	var data DbSyncResponse
 
@@ -33,10 +33,10 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	var uptime int
 
 	if err := row.Scan(&uptime); err != nil {
-		log.Printf("Database: %s STATUS: %s", dbName, "Inactive")
-		status = "Inactive"
+		log.Printf("Database: %s STATUS: %s", dbName, "INACTIVE")
+		status = "INACTIVE"
 	} else {
-		status = "Active"
+		status = "ACTIVE"
 		log.Printf("Database: %s is Active", dbName)
 	}
 	log.Printf("Database: %s Active: %d seconds", dbName, uptime)
@@ -119,6 +119,8 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	log.Default().Println("Printing Data Obj ", data)
 
 	hostGroupId := data.HostGroupId
+	databaseStatus := data.DatabaseStatus
+	log.Default().Println("Database Status from API:", databaseStatus)
 	log.Default().Println("Database Synchronized with host group Id:", hostGroupId)
-	return hostGroupId, nil
+	return hostGroupId, databaseStatus, nil
 }

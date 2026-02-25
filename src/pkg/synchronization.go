@@ -90,8 +90,13 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		log.Printf("Processing database: %s", dbName)
 
 		// Register the database agent and get its ID
-		instanceId := RegisterAgent(db, dbName, config)
-		log.Printf("Registered agent for database %s with Instance ID: %s", dbName, instanceId)
+		instanceId, agentStatus := RegisterAgent(db, dbName, config)
+		log.Printf("Registered agent for database %s with Instance ID: %s and Agent Status: %s", dbName, instanceId, agentStatus)
+		// If the agent is marked as deleted, skip further processing for this database
+		if agentStatus == "DELETED" {
+			log.Printf("Agent for database %s is deleted, skipping further processing", dbName)
+			continue
+		}
 
 		if instanceId == "" {
 			log.Printf("Failed to register agent for the database %s", dbName)
@@ -105,11 +110,18 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		log.Println("Last Active Time call completed")
 
 		// Fetch database status
-		hostGroupId, err := FetchDatabaseStatus(db, dbName, config, instanceId)
+		hostGroupId, databaseStatus, err := FetchDatabaseStatus(db, dbName, config, instanceId)
 		if err != nil {
 			log.Printf("Failed to fetch status for database %s: %v", dbName, err)
 		}
 		log.Println("FetchDatabaseStatus completed for host group Id:", hostGroupId)
+		log.Println("Database Status from API:", databaseStatus)
+
+		// If the database is marked as deleted in the API, skip further processing
+		if databaseStatus == "DELETED" {
+			log.Printf("Database %s is marked as deleted in the API, skipping further processing", dbName)
+			continue
+		}
 
 		err = UpdateHostInProxySQL(config, config.Host, hostGroupId, 5432)
 		if err != nil {
