@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -84,7 +83,7 @@ func LoadDataSource() (pkg.DataSourceConfig, error) {
 }
 
 func startAgent(exit chan struct{}) {
-	fmt.Println("Starting Authnull Database Agent V1.1")
+	log.Println("Starting Authnull Database Agent V1.1")
 
 	// Load the configuration
 	var err error
