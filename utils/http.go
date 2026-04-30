@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -22,6 +23,17 @@ func GetPublicIP() (string, error) {
 	}
 
 	return string(ip), nil
+}
+
+func GetPrivateIP() (string, error) {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String(), nil
 }
 
 func DecryptPassword(enc, key string) (string, error) {
