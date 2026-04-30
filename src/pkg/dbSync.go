@@ -67,14 +67,24 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	}
 	log.Default().Println("Agent VM IP:", agentVMIP)
 
+	// Get the private IP of the agent
+	privateIP, err := utils.GetPrivateIP()
+	if err != nil {
+		log.Printf("Failed to get Private IP: %v", err)
+		privateIP = ""
+	}
+	log.Default().Println("Agent Private IP:", privateIP)
+
 	payload := map[string]interface{}{
 		"orgId":        orgID,
 		"tenantId":     tenantID,
 		"databaseType": "postgres",
 		"databaseName": dbName,
 		"port":         config.Port,
-		"host":         hostIP,    // Host VM IP (where database runs)
-		"agentVmIp":    agentVMIP, // Agent VM IP (where proxysql runs)
+		"host":         hostIP,       // Host VM IP (where database runs)
+		"agentVmIp":    agentVMIP,    // Agent VM IP (where proxysql runs)
+		"hostName":     instanceName, // Hostname of the agent
+		"privateIp":    privateIP,    // Private IP of the agent
 		"status":       status,
 		"uuid":         config.Key,
 		"instanceId":   instanceId,
