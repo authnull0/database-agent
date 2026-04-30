@@ -84,7 +84,7 @@ func LoadDataSource() (pkg.DataSourceConfig, error) {
 }
 
 func startAgent(exit chan struct{}) {
-	fmt.Println("Starting Authnull Database Agent...")
+	fmt.Println("Starting Authnull Database Agent V1.1")
 
 	// Load the configuration
 	var err error
