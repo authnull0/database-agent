@@ -35,6 +35,13 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) 
 	}
 	log.Default().Println("IP Address:", ipAddr)
 
+	privateIp, err := utils.GetPrivateIP()
+	if err != nil {
+		log.Default().Println("Failed to get Private IP Address")
+	} else {
+		log.Default().Println("Private IP Address:", privateIp)
+	}
+
 	// Sync database information with the API
 	payload := map[string]interface{}{
 		"orgId":        orgID,
@@ -46,6 +53,7 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) 
 		"publicIp":     ipAddr,
 		"instanceName": instanceName,
 		"dbType":       config.DBType, // This will be "postgres" for PostgreSQL
+		"privateIp":    privateIp,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
