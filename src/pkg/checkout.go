@@ -128,7 +128,7 @@ type Permission struct{}     // Placeholder for missing struct
 func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 
 	//API call to get all jobs from the queue
-	url := "https://prod.api.authnull.com/api/v1/databaseService/getJobQueue"
+	url := Config.API + "/api/v1/databaseService/getJobQueue"
 
 	orgID, _ := strconv.Atoi(Config.OrgID)
 	tenantID, _ := strconv.Atoi(Config.TenantID)
@@ -190,7 +190,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 	//Iterate through the jobs and process them
 	for _, job := range response.Data {
 		//Call Other Function to rotate the Password for the DB User in the Database
-		policyDetails, err := FetchPolicyDetails(orgID, tenantID, job.PolicyID)
+		policyDetails, err := FetchPolicyDetails(Config.API, orgID, tenantID, job.PolicyID)
 		if err != nil {
 			log.Printf("Error fetching policy details for job %s: %v", job.JobName, err)
 			continue
@@ -218,7 +218,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 		if success {
 			log.Printf("Credentials generated successfully for job: %s", job.JobName)
 			//Call Update Job API to update the job status to completed
-			updateJobURL := "https://prod.api.authnull.com/api/v1/databaseService/updateQueue"
+			updateJobURL := Config.API + "/api/v1/databaseService/updateQueue"
 			updateJobPayload := map[string]interface{}{
 				"org_id":    orgID,
 				"tenant_id": tenantID,
@@ -257,8 +257,8 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 
 }
 
-func FetchPolicyDetails(orgID int, tenantID int, policyID uuid.UUID) (*GetPolicyDetailsResponse, error) {
-	url := "https://prod.api.authnull.com/api/v1/policyService/getPolicyDetails"
+func FetchPolicyDetails(api string, orgID int, tenantID int, policyID uuid.UUID) (*GetPolicyDetailsResponse, error) {
+	url := api + "/api/v1/policyService/getPolicyDetails"
 
 	payload := GetPolicyDetails{
 		OrgId:    orgID,
@@ -539,14 +539,14 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		Privilege:      privilege,
 	}
 
-	credentialID, err := CallCreateDatabaseCredentialAPI(databaseCredentialRequest)
+	credentialID, err := CallCreateDatabaseCredentialAPI(Config.API, databaseCredentialRequest)
 	if err != nil {
 		log.Printf("Error while calling Create Database Credential API: %v", err)
 		return false, err
 	}
 	log.Default().Println("The cred id is:", credentialID)
 
-	err = CallPolicyCredentialMapping(orgId, policyID, tenantId, credentialID)
+	err = CallPolicyCredentialMapping(Config.API, orgId, policyID, tenantId, credentialID)
 	if err != nil {
 		log.Printf("Error while calling Update Policy Credential Mapping API: %v", err)
 		return false, err
@@ -565,7 +565,7 @@ func GenerateRandomPassword(length int) (string, error) {
 	}
 	return string(b), nil
 }
-func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCredentialRequestDto) (int, error) {
+func CallCreateDatabaseCredentialAPI(api string, databaseCredentialRequest CreateDatabaseCredentialRequestDto) (int, error) {
 	log.Default().Println("Entered CallCreateDatabaseCredentialAPI")
 	client := &http.Client{}
 	//Marshal the request body
@@ -574,7 +574,7 @@ func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCre
 		return 0, errors.New("failed to marshal request body: " + err.Error())
 	}
 	log.Default().Println("Successfully Marshalled Request Body")
-	url := "https://prod.api.authnull.com/api/v1/credential/createDatabaseCredential"
+	url := api + "/api/v1/credential/createDatabaseCredential"
 	log.Default().Println("URL", url)
 	//Create the request
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(databaseCredentialRequestBytes))
@@ -605,7 +605,7 @@ func CallCreateDatabaseCredentialAPI(databaseCredentialRequest CreateDatabaseCre
 //func call to call policy credential mapping from policy-service
 //payload will be the orgid,tenantid,policyid and credential id
 
-func CallPolicyCredentialMapping(orgId int, policyId uuid.UUID, tenantId int, credentialId int) error {
+func CallPolicyCredentialMapping(api string, orgId int, policyId uuid.UUID, tenantId int, credentialId int) error {
 	payload := struct {
 		OrgId        int       `json:"org_id"`
 		TenantId     int       `json:"tenant_id"`
@@ -624,7 +624,7 @@ func CallPolicyCredentialMapping(orgId int, policyId uuid.UUID, tenantId int, cr
 	}
 	log.Default().Println(string(jsonData))
 	client := &http.Client{}
-	url := "https://prod.api.authnull.com/api/v1/policyService/updatePolicyCredentialMapping"
+	url := api + "/api/v1/policyService/updatePolicyCredentialMapping"
 	log.Default().Println("URL", url)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
