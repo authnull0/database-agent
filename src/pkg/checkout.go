@@ -365,6 +365,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 
 	// Before checking the password, first verify the user exists
 	var userExists int
+	passwordReused := false
 	checkUserExistsQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_users WHERE username = '%s'", dbUserName)
 	err = proxySQLDB.QueryRow(checkUserExistsQuery).Scan(&userExists)
 	if err != nil {
@@ -386,6 +387,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		if existingPassword != "" {
 			log.Printf("Existing password found for user %s, skipping password rotation", dbUserName)
 			password = existingPassword
+			passwordReused = true
 		} else {
 			log.Printf("User exists but has empty password, generating new one")
 			password, err = GenerateRandomPassword(16)
@@ -435,14 +437,16 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 			log.Printf("Error creating user: %v", err)
 			return false, err
 		}
-	} else {
-		// Update password for the role
+	} else if !passwordReused {
+		// Only ALTER ROLE when password is newly generated, not when reusing existing ProxySQL password
 		_, err = db.Exec(alterPasswdQuery)
 		if err != nil {
 			log.Printf("Error updating password: %v", err)
 			return false, err
 		}
 		log.Printf("Password updated successfully for user %s", dbUserName)
+	} else {
+		log.Printf("User %s already exists with correct password, skipping ALTER ROLE", dbUserName)
 	}
 
 	// Check if the user already exists in ProxySQL
