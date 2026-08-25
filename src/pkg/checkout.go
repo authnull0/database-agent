@@ -472,6 +472,13 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 // seed feeding a non-cryptographic generator, for values that are written into
 // pgsql_users and grant real database access.
 func GenerateRandomPassword(length int) (string, error) {
+	// Deliberately excludes ' \ and ": this value is interpolated into
+	//     ALTER ROLE %s WITH PASSWORD '%s'
+	//     UPDATE pgsql_users SET password = '%s' WHERE ...
+	// neither of which is parameterised. Adding any of those three characters
+	// turns a "stronger passwords" edit into SQL injection on the customer's own
+	// PostgreSQL and on the ProxySQL admin interface, from a value the customer
+	// never sees. Guarded by TestPasswordCharsetIsSQLSafe.
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+[]{}|;:,.<>?"
 	if length <= 0 {
 		return "", errors.New("password length must be positive")

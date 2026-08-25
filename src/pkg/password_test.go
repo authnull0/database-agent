@@ -49,3 +49,24 @@ func TestGenerateRandomPassword(t *testing.T) {
 		t.Error("length 0 should be an error")
 	}
 }
+
+// The generated password is interpolated into two non-parameterised statements
+// (ALTER ROLE ... PASSWORD '%s', and an UPDATE on pgsql_users). The only thing
+// preventing SQL injection there is the charset, so pin it: widening it to
+// include a quote or backslash must fail here rather than in production.
+func TestPasswordCharsetIsSQLSafe(t *testing.T) {
+	const forbidden = `'"\`
+
+	// Generate enough to make an accidental widening overwhelmingly likely to show.
+	for i := 0; i < 200; i++ {
+		p, err := GenerateRandomPassword(32)
+		if err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+		if idx := strings.IndexAny(p, forbidden); idx >= 0 {
+			t.Fatalf("password contains SQL-unsafe character %q -- it is interpolated "+
+				"unparameterised into ALTER ROLE and an UPDATE on pgsql_users: %q",
+				p[idx], p)
+		}
+	}
+}
