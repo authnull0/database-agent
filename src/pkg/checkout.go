@@ -2,32 +2,22 @@ package pkg
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	cryptoRand "crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-
-	"math/rand"
+	"math/big"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/authnull0/database-agent/utils"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
-
-type CreateDatabaseCredentialResponseDto struct {
-	Status       string `json:"status"`
-	Message      string `json:"message"`
-	Code         int    `json:"code"`
-	CredentialId int    `json:"credentialId"`
-}
 
 type GetAllJobQueueRequest struct {
 	OrgID     int    `json:"org_id"`
@@ -67,21 +57,6 @@ type JobQueue struct {
 	HostgroupID   int       `gorm:"column:hostgroup_id" json:"hostgroup_id"`     // Multi-host: ProxySQL hostgroup ID
 	DefaultSchema string    `gorm:"column:default_schema" json:"default_schema"` // Multi-host: ProxySQL default schema (database name)
 }
-type CreateDatabaseCredentialRequestDto struct {
-	OrgId          int                 `json:"orgId"`
-	TenantId       int                 `json:"tenantId"`
-	WalletUserId   int                 `json:"userId"`
-	IssuerId       int                 `json:"issuerId"`
-	Host           string              `json:"host"`
-	CredentialType string              `json:"credentialType"`
-	DatabaseName   string              `json:"database_name"`
-	Tables         []string            `json:"tables"`
-	FieldMasking   map[string][]string `json:"field_masking"`
-	DBUser         string              `json:"user"`
-	Privilege      []string            `json:"privilege"`
-	Password       string              `json:"password"`
-}
-
 type GetPolicyDetails struct {
 	OrgId    int       `json:"orgId"`
 	TenantId int       `json:"tenantId"`
@@ -312,32 +287,6 @@ func FetchPolicyDetails(api string, orgID int, tenantID int, policyID uuid.UUID)
 	return &apiResponse, nil
 }
 
-// New function to encrypt a string using AES
-func EncryptAES(plaintext string, key []byte) (string, error) {
-	// Create a new AES cipher block
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-
-	// Create a byte array with the plaintext
-	plaintextBytes := []byte(plaintext)
-
-	// The IV needs to be unique, but not secure
-	ciphertext := make([]byte, aes.BlockSize+len(plaintextBytes))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := io.ReadFull(cryptoRand.Reader, iv); err != nil {
-		return "", err
-	}
-
-	// Use CFB mode for encryption
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintextBytes)
-
-	// Return the encrypted bytes as a hex string
-	return hex.EncodeToString(ciphertext), nil
-}
-
 func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName string, host string,
 	WalletUserID int, IssuerId int, TableName string, Fields string, Privlege string, DbUserID int,
 	policyID uuid.UUID, policyDetails *GetPolicyDetailsResponse, hostgroupID int) (bool, error) {
@@ -366,8 +315,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	// Before checking the password, first verify the user exists
 	var userExists int
 	passwordReused := false
-	checkUserExistsQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_users WHERE username = '%s'", dbUserName)
-	err = proxySQLDB.QueryRow(checkUserExistsQuery).Scan(&userExists)
+	err = proxySQLDB.QueryRow("SELECT COUNT(*) FROM pgsql_users WHERE username = ?", dbUserName).Scan(&userExists)
 	if err != nil {
 		log.Printf("Error checking if user exists in ProxySQL: %v", err)
 		return false, err
@@ -377,8 +325,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	if userExists > 0 {
 		// User exists, let's get the password
 		var existingPassword string
-		checkExistingPasswordQuery := fmt.Sprintf("SELECT password FROM pgsql_users WHERE username = '%s'", dbUserName)
-		err = proxySQLDB.QueryRow(checkExistingPasswordQuery).Scan(&existingPassword)
+		err = proxySQLDB.QueryRow("SELECT password FROM pgsql_users WHERE username = ?", dbUserName).Scan(&existingPassword)
 		if err != nil {
 			log.Printf("Error retrieving password for user %s: %v", dbUserName, err)
 			return false, err
@@ -417,13 +364,20 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		}
 	}
 
-	// Check if the user exists
-	checkUserQuery1 := fmt.Sprintf("SELECT COUNT(*) FROM pg_roles WHERE rolname = '%s'", dbUserName)
-	alterPasswdQuery := fmt.Sprintf("ALTER ROLE %s WITH PASSWORD '%s'", dbUserName, password)
-	updatePasswordQuery := fmt.Sprintf("UPDATE pgsql_users SET password = '%s' WHERE username = '%s'", password, dbUserName)
+	// dbUserName is administrator-supplied (policyJson.Database.User, by way of
+	// the job queue) and reaches DDL on the customer's own PostgreSQL, so it is
+	// quoted rather than interpolated raw. ALTER/CREATE ROLE take it in
+	// identifier position -- QuoteIdentifier, not QuoteLiteral -- while the
+	// pg_roles lookup compares it as a string value.
+	//
+	// These three statements go to PostgreSQL via lib/pq. The pgsql_users
+	// statements below go to ProxySQL's admin interface over the MySQL protocol,
+	// where pq's quoting rules do not apply; those use placeholders instead.
+	quotedRole := pq.QuoteIdentifier(dbUserName)
+	alterPasswdQuery := fmt.Sprintf("ALTER ROLE %s WITH PASSWORD %s", quotedRole, pq.QuoteLiteral(password))
 
 	var userCount1 int
-	err = db.QueryRow(checkUserQuery1).Scan(&userCount1)
+	err = db.QueryRow("SELECT COUNT(*) FROM pg_roles WHERE rolname = $1", dbUserName).Scan(&userCount1)
 	if err != nil {
 		log.Printf("Error checking user: %v", err)
 		return false, err
@@ -431,7 +385,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 
 	if userCount1 == 0 {
 		// Create role in PostgreSQL
-		createUserQuery := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD '%s'", dbUserName, password)
+		createUserQuery := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD %s", quotedRole, pq.QuoteLiteral(password))
 		_, err = db.Exec(createUserQuery)
 		if err != nil {
 			log.Printf("Error creating user: %v", err)
@@ -450,9 +404,8 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 
 	// Check if the user already exists in ProxySQL
-	checkUserQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_users WHERE username = '%s'", dbUserName)
 	var userCount2 int
-	err = proxySQLDB.QueryRow(checkUserQuery).Scan(&userCount2)
+	err = proxySQLDB.QueryRow("SELECT COUNT(*) FROM pgsql_users WHERE username = ?", dbUserName).Scan(&userCount2)
 	if err != nil {
 		log.Printf("Error while checking existence of user %s in ProxySQL: %v", dbUserName, err)
 		return false, err
@@ -461,10 +414,9 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	if userCount2 == 0 {
 		// Create the user if it does not exist
 		// Include default_hostgroup for multi-host routing
-		var createUserQuery string
-		createUserQuery = fmt.Sprintf("INSERT INTO pgsql_users (username, password, default_hostgroup, active, use_ssl) VALUES ('%s', '%s', %d, 1, 0)", dbUserName, password, hostgroupID)
-
-		_, err = proxySQLDB.Exec(createUserQuery)
+		_, err = proxySQLDB.Exec(
+			"INSERT INTO pgsql_users (username, password, default_hostgroup, active, use_ssl) VALUES (?, ?, ?, 1, 0)",
+			dbUserName, password, hostgroupID)
 
 		if err != nil {
 			log.Printf("Error while creating user %s in ProxySQL: %v", dbUserName, err)
@@ -474,8 +426,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	} else {
 		// User exists, update hostgroup if provided
 		if hostgroupID > 0 {
-			updateHostgroupQuery := fmt.Sprintf("UPDATE pgsql_users SET default_hostgroup = %d WHERE username = '%s'", hostgroupID, dbUserName)
-			_, err = proxySQLDB.Exec(updateHostgroupQuery)
+			_, err = proxySQLDB.Exec("UPDATE pgsql_users SET default_hostgroup = ? WHERE username = ?", hostgroupID, dbUserName)
 			if err != nil {
 				log.Printf("Error updating hostgroup for user %s: %v", dbUserName, err)
 			}
@@ -483,7 +434,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 
 	// Update the password for the user in ProxySQL
-	_, err = proxySQLDB.Exec(updatePasswordQuery)
+	_, err = proxySQLDB.Exec("UPDATE pgsql_users SET password = ? WHERE username = ?", password, dbUserName)
 	if err != nil {
 		log.Printf("Error while updating password for user %s in ProxySQL: %v", dbUserName, err)
 		return false, err
@@ -502,147 +453,47 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		return false, err
 	}
 
-	// [Rest of the function remains unchanged]
-	orgId, _ := strconv.Atoi(Config.OrgID)
-	tenantId, _ := strconv.Atoi(Config.TenantID)
-
-	// Tables and FieldMasking are optional for PostgreSQL
-	tables := policyDetails.Data.Database.Tables
-	if tables == nil {
-		tables = []string{} // Use empty slice if not provided
-	}
-
-	fieldMasking := policyDetails.Data.Database.FieldMasking
-	if fieldMasking == nil {
-		fieldMasking = make(map[string][]string) // Use empty map if not provided
-	}
-
-	privilege := policyDetails.Data.Database.Privilege
-
-	// Step 3: Encrypt the password before sending it to the API
-	encryptionKey := []byte("84sF#v7Fpt!L#PesYb^AezXrUn2kE%5v")
-
-	encryptedPassword, err := EncryptAES(password, encryptionKey)
-	if err != nil {
-		log.Printf("Error encrypting password: %v", err)
-		return false, err
-	}
-
-	databaseCredentialRequest := CreateDatabaseCredentialRequestDto{
-		OrgId:          orgId,
-		TenantId:       tenantId,
-		WalletUserId:   WalletUserID,
-		IssuerId:       IssuerId,
-		Host:           host,
-		CredentialType: "DATABASE",
-		DatabaseName:   dbName,
-		Password:       encryptedPassword,
-		Tables:         tables,
-		FieldMasking:   fieldMasking,
-		DBUser:         dbUserName,
-		Privilege:      privilege,
-	}
-
-	credentialID, err := CallCreateDatabaseCredentialAPI(Config.API, databaseCredentialRequest)
-	if err != nil {
-		log.Printf("Error while calling Create Database Credential API: %v", err)
-		return false, err
-	}
-	log.Default().Println("The cred id is:", credentialID)
-
-	err = CallPolicyCredentialMapping(Config.API, orgId, policyID, tenantId, credentialID)
-	if err != nil {
-		log.Printf("Error while calling Update Policy Credential Mapping API: %v", err)
-		return false, err
-	}
+	// The credential pipeline that used to run here is gone. It encrypted the
+	// password with a hardcoded AES key and posted it to
+	// /api/v1/credential/createDatabaseCredential and
+	// /api/v1/policyService/updatePolicyCredentialMapping -- both of which
+	// return 404, which is why provisioning jobs never reached completion.
+	//
+	// The role and the pgsql_users row written above are the whole job now. The
+	// policy fields the credential used to carry (privilege, tables,
+	// fieldMasking) are read straight from the policy at login time by the MFA
+	// decision endpoint, so nothing needs to be minted here.
+	log.Printf("Provisioning complete for user %s on database %s", dbUserName, dbName)
 
 	return true, nil
 }
 
+// GenerateRandomPassword returns a cryptographically random password of the
+// given length.
+//
+// This used to use math/rand seeded from time.Now().UnixNano() -- a predictable
+// seed feeding a non-cryptographic generator, for values that are written into
+// pgsql_users and grant real database access.
 func GenerateRandomPassword(length int) (string, error) {
-	// Generate a random password of the given length
+	// Deliberately excludes ' \ and ": this value is interpolated into
+	//     ALTER ROLE %s WITH PASSWORD '%s'
+	//     UPDATE pgsql_users SET password = '%s' WHERE ...
+	// neither of which is parameterised. Adding any of those three characters
+	// turns a "stronger passwords" edit into SQL injection on the customer's own
+	// PostgreSQL and on the ProxySQL admin interface, from a value the customer
+	// never sees. Guarded by TestPasswordCharsetIsSQLSafe.
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+[]{}|;:,.<>?"
+	if length <= 0 {
+		return "", errors.New("password length must be positive")
+	}
 	b := make([]byte, length)
-	seededRand := rand.New(rand.NewSource(time.Now().UnixNano())) // Seed the random number generator
+	max := big.NewInt(int64(len(charset)))
 	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))] // Select a random character from the charset
+		n, err := cryptoRand.Int(cryptoRand.Reader, max)
+		if err != nil {
+			return "", fmt.Errorf("failed to read cryptographic randomness: %w", err)
+		}
+		b[i] = charset[n.Int64()]
 	}
 	return string(b), nil
-}
-func CallCreateDatabaseCredentialAPI(api string, databaseCredentialRequest CreateDatabaseCredentialRequestDto) (int, error) {
-	log.Default().Println("Entered CallCreateDatabaseCredentialAPI")
-	client := &http.Client{}
-	//Marshal the request body
-	databaseCredentialRequestBytes, err := json.Marshal(databaseCredentialRequest)
-	if err != nil {
-		return 0, errors.New("failed to marshal request body: " + err.Error())
-	}
-	log.Default().Println("Successfully Marshalled Request Body")
-	url := api + "/api/v1/credential/createDatabaseCredential"
-	log.Default().Println("URL", url)
-	//Create the request
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(databaseCredentialRequestBytes))
-	if err != nil {
-		return 0, errors.New("failed to create request: " + err.Error())
-	}
-	log.Default().Println("Successfully Created Request")
-	req.Header.Set("Content-Type", "application/json")
-	log.Default().Println("Successfully Set Header", req)
-	//Execute the request
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, errors.New("failed to execute request: " + err.Error())
-	}
-	defer resp.Body.Close()
-	log.Default().Println("response Status:", resp.Status)
-	log.Default().Println("response :", resp)
-	var response CreateDatabaseCredentialResponseDto
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return 0, errors.New("failed to decode response: " + err.Error())
-	}
-
-	log.Default().Println("Successfully received credential ID:", response.CredentialId)
-
-	return response.CredentialId, nil
-}
-
-//func call to call policy credential mapping from policy-service
-//payload will be the orgid,tenantid,policyid and credential id
-
-func CallPolicyCredentialMapping(api string, orgId int, policyId uuid.UUID, tenantId int, credentialId int) error {
-	payload := struct {
-		OrgId        int       `json:"org_id"`
-		TenantId     int       `json:"tenant_id"`
-		PolicyId     uuid.UUID `json:"policy_id"`
-		CredentialId int       `json:"credential_id"`
-	}{
-		OrgId:        orgId,
-		TenantId:     tenantId,
-		PolicyId:     policyId,
-		CredentialId: credentialId,
-	}
-
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return errors.New("failed to marshal: " + err.Error())
-	}
-	log.Default().Println(string(jsonData))
-	client := &http.Client{}
-	url := api + "/api/v1/policyService/updatePolicyCredentialMapping"
-	log.Default().Println("URL", url)
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return errors.New("failed to create request: " + err.Error())
-	}
-	log.Default().Println("Successfully Created Request")
-	req.Header.Set("Content-Type", "application/json")
-	log.Default().Println("Successfully Set Header", req)
-	resp, err := client.Do(req)
-	if err != nil {
-		return errors.New("failed to execute request: " + err.Error())
-	}
-	defer resp.Body.Close()
-	log.Default().Println("response Status:", resp.Status)
-	log.Default().Println("response :", resp)
-	return nil
 }
