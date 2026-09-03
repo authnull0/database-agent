@@ -16,6 +16,7 @@ import (
 
 	"github.com/authnull0/database-agent/utils"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 type GetAllJobQueueRequest struct {
@@ -314,8 +315,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	// Before checking the password, first verify the user exists
 	var userExists int
 	passwordReused := false
-	checkUserExistsQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_users WHERE username = '%s'", dbUserName)
-	err = proxySQLDB.QueryRow(checkUserExistsQuery).Scan(&userExists)
+	err = proxySQLDB.QueryRow("SELECT COUNT(*) FROM pgsql_users WHERE username = ?", dbUserName).Scan(&userExists)
 	if err != nil {
 		log.Printf("Error checking if user exists in ProxySQL: %v", err)
 		return false, err
@@ -325,8 +325,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	if userExists > 0 {
 		// User exists, let's get the password
 		var existingPassword string
-		checkExistingPasswordQuery := fmt.Sprintf("SELECT password FROM pgsql_users WHERE username = '%s'", dbUserName)
-		err = proxySQLDB.QueryRow(checkExistingPasswordQuery).Scan(&existingPassword)
+		err = proxySQLDB.QueryRow("SELECT password FROM pgsql_users WHERE username = ?", dbUserName).Scan(&existingPassword)
 		if err != nil {
 			log.Printf("Error retrieving password for user %s: %v", dbUserName, err)
 			return false, err
@@ -365,13 +364,20 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		}
 	}
 
-	// Check if the user exists
-	checkUserQuery1 := fmt.Sprintf("SELECT COUNT(*) FROM pg_roles WHERE rolname = '%s'", dbUserName)
-	alterPasswdQuery := fmt.Sprintf("ALTER ROLE %s WITH PASSWORD '%s'", dbUserName, password)
-	updatePasswordQuery := fmt.Sprintf("UPDATE pgsql_users SET password = '%s' WHERE username = '%s'", password, dbUserName)
+	// dbUserName is administrator-supplied (policyJson.Database.User, by way of
+	// the job queue) and reaches DDL on the customer's own PostgreSQL, so it is
+	// quoted rather than interpolated raw. ALTER/CREATE ROLE take it in
+	// identifier position -- QuoteIdentifier, not QuoteLiteral -- while the
+	// pg_roles lookup compares it as a string value.
+	//
+	// These three statements go to PostgreSQL via lib/pq. The pgsql_users
+	// statements below go to ProxySQL's admin interface over the MySQL protocol,
+	// where pq's quoting rules do not apply; those use placeholders instead.
+	quotedRole := pq.QuoteIdentifier(dbUserName)
+	alterPasswdQuery := fmt.Sprintf("ALTER ROLE %s WITH PASSWORD %s", quotedRole, pq.QuoteLiteral(password))
 
 	var userCount1 int
-	err = db.QueryRow(checkUserQuery1).Scan(&userCount1)
+	err = db.QueryRow("SELECT COUNT(*) FROM pg_roles WHERE rolname = $1", dbUserName).Scan(&userCount1)
 	if err != nil {
 		log.Printf("Error checking user: %v", err)
 		return false, err
@@ -379,7 +385,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 
 	if userCount1 == 0 {
 		// Create role in PostgreSQL
-		createUserQuery := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD '%s'", dbUserName, password)
+		createUserQuery := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD %s", quotedRole, pq.QuoteLiteral(password))
 		_, err = db.Exec(createUserQuery)
 		if err != nil {
 			log.Printf("Error creating user: %v", err)
@@ -398,9 +404,8 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 
 	// Check if the user already exists in ProxySQL
-	checkUserQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_users WHERE username = '%s'", dbUserName)
 	var userCount2 int
-	err = proxySQLDB.QueryRow(checkUserQuery).Scan(&userCount2)
+	err = proxySQLDB.QueryRow("SELECT COUNT(*) FROM pgsql_users WHERE username = ?", dbUserName).Scan(&userCount2)
 	if err != nil {
 		log.Printf("Error while checking existence of user %s in ProxySQL: %v", dbUserName, err)
 		return false, err
@@ -409,10 +414,9 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	if userCount2 == 0 {
 		// Create the user if it does not exist
 		// Include default_hostgroup for multi-host routing
-		var createUserQuery string
-		createUserQuery = fmt.Sprintf("INSERT INTO pgsql_users (username, password, default_hostgroup, active, use_ssl) VALUES ('%s', '%s', %d, 1, 0)", dbUserName, password, hostgroupID)
-
-		_, err = proxySQLDB.Exec(createUserQuery)
+		_, err = proxySQLDB.Exec(
+			"INSERT INTO pgsql_users (username, password, default_hostgroup, active, use_ssl) VALUES (?, ?, ?, 1, 0)",
+			dbUserName, password, hostgroupID)
 
 		if err != nil {
 			log.Printf("Error while creating user %s in ProxySQL: %v", dbUserName, err)
@@ -422,8 +426,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	} else {
 		// User exists, update hostgroup if provided
 		if hostgroupID > 0 {
-			updateHostgroupQuery := fmt.Sprintf("UPDATE pgsql_users SET default_hostgroup = %d WHERE username = '%s'", hostgroupID, dbUserName)
-			_, err = proxySQLDB.Exec(updateHostgroupQuery)
+			_, err = proxySQLDB.Exec("UPDATE pgsql_users SET default_hostgroup = ? WHERE username = ?", hostgroupID, dbUserName)
 			if err != nil {
 				log.Printf("Error updating hostgroup for user %s: %v", dbUserName, err)
 			}
@@ -431,7 +434,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 
 	// Update the password for the user in ProxySQL
-	_, err = proxySQLDB.Exec(updatePasswordQuery)
+	_, err = proxySQLDB.Exec("UPDATE pgsql_users SET password = ? WHERE username = ?", password, dbUserName)
 	if err != nil {
 		log.Printf("Error while updating password for user %s in ProxySQL: %v", dbUserName, err)
 		return false, err

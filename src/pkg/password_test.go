@@ -50,10 +50,10 @@ func TestGenerateRandomPassword(t *testing.T) {
 	}
 }
 
-// The generated password is interpolated into two non-parameterised statements
-// (ALTER ROLE ... PASSWORD '%s', and an UPDATE on pgsql_users). The only thing
-// preventing SQL injection there is the charset, so pin it: widening it to
-// include a quote or backslash must fail here rather than in production.
+// A tripwire, not the control. The PostgreSQL DDL is quoted with pq and the
+// ProxySQL admin statements use placeholders, so injection no longer depends on
+// the charset -- but a quote or backslash appearing here would still be a
+// surprise worth catching, and the check costs nothing.
 func TestPasswordCharsetIsSQLSafe(t *testing.T) {
 	const forbidden = `'"\`
 
