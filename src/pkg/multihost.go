@@ -102,7 +102,7 @@ func ProcessMultipleHosts(config DBConfig, hostsFilePath string) error {
 			Password:     host.Password,
 			Key:          config.Key,
 			MachineKey:   config.MachineKey,
-			AgentVMIP:    config.AgentVMIP,
+			AgentVMIP:    AgentIdentity(config),
 		}
 
 		// Fetch database details for this host
@@ -151,7 +151,7 @@ func SyncMultipleHosts(config DBConfig, hostsFilePath string) bool {
 			Password:     host.Password,
 			Key:          config.Key,
 			MachineKey:   config.MachineKey,
-			AgentVMIP:    config.AgentVMIP,
+			AgentVMIP:    AgentIdentity(config),
 		}
 
 		// Fetch database details for this host
