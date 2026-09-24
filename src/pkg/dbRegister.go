@@ -28,12 +28,8 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) 
 	instanceName, _ := os.Hostname()
 	log.Default().Println("Register Agent", instanceName)
 
-	ipAddr, err := utils.GetPublicIP()
-	if err != nil {
-		fmt.Println("Failed to get PublicIp Address", err)
-		//return ""
-	}
-	log.Default().Println("IP Address:", ipAddr)
+	ipAddr := AgentIdentity(config)
+	log.Default().Println("Agent VM IP:", ipAddr)
 
 	privateIp, err := utils.GetPrivateIP()
 	if err != nil {

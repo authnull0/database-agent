@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/authnull0/database-agent/utils"
 	"github.com/google/uuid"
 )
 
@@ -107,12 +106,8 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 	orgID, _ := strconv.Atoi(Config.OrgID)
 	tenantID, _ := strconv.Atoi(Config.TenantID)
 
-	ipAddr, err := utils.GetPublicIP()
-	if err != nil {
-		fmt.Println("Failed to get PublicIp Address", err)
-		//return ""
-	}
-	log.Default().Println("IP Address:", ipAddr)
+	ipAddr := AgentIdentity(Config)
+	log.Default().Println("Agent VM IP:", ipAddr)
 	payload := GetAllJobQueueRequest{
 		OrgID:     orgID,
 		TenantID:  tenantID,

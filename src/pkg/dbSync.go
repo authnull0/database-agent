@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -44,11 +43,8 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	instanceName, _ := os.Hostname()
 	log.Default().Println("Register Agent", instanceName)
 
-	// Get the public IP of the agent VM (for legacy mode fallback)
-	publicIP, err := utils.GetPublicIP()
-	if err != nil {
-		fmt.Println("Failed to get PublicIp Address", err)
-	}
+	// Agent VM IP (AGENT_VM_IP -> private IP; never the public/ipify address)
+	publicIP := AgentIdentity(config)
 
 	// Determine the actual database host IP
 	// In multi-host mode, config.Host contains the actual database host IP
@@ -61,10 +57,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 
 	// Sync database information with the API
 	// Include agent_vm_ip for multi-host mode
-	agentVMIP := config.AgentVMIP
-	if agentVMIP == "" {
-		agentVMIP = publicIP // Legacy mode: agent VM IP is same as public IP
-	}
+	agentVMIP := AgentIdentity(config)
 	log.Default().Println("Agent VM IP:", agentVMIP)
 
 	// Get the private IP of the agent
