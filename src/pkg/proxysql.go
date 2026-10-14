@@ -119,6 +119,15 @@ func RegisterHostInProxySQL(config DBConfig, hostname string, hostgroupID int, p
 	return nil
 }
 
+// UpdateHostInProxySQL makes ProxySQL match what the backend says about this host. It runs on
+// every sync cycle, so it must ADD a missing server, not only update one that is there.
+//
+// It used to do nothing when the server was absent ("No Need to update"), which left the only
+// insert in InitializeProxySQL at agent start. The installer starts the agent BEFORE it installs
+// ProxySQL, so that insert always failed on a fresh install and was never retried -- and the same
+// happened after any ProxySQL reinstall or reset. Every user then routed to an empty hostgroup.
+//
+// The same start-up-only problem applied to the clear-text auth setting, so it is re-asserted here.
 func UpdateHostInProxySQL(config DBConfig, hostname string, hostgroupID int, port int) error {
 	proxysqlDB, err := ConnectToProxysqlDB(config)
 	if err != nil {
@@ -126,36 +135,69 @@ func UpdateHostInProxySQL(config DBConfig, hostname string, hostgroupID int, por
 	}
 	defer proxysqlDB.Close()
 
-	// Check if server already exists with host group id 0
+	ensureClearTextAuth(proxysqlDB)
+
+	// Match on hostname and port only. The hostgroup is what the backend may have changed, and
+	// matching on it too would insert a duplicate row for a server that has moved hostgroup.
 	var count int
-	checkQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_servers WHERE hostgroup_id = %d AND hostname = '%s' AND port = %d", 0, hostname, port)
-	err = proxysqlDB.QueryRow(checkQuery).Scan(&count)
-	if err != nil {
+	checkQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_servers WHERE hostname = '%s' AND port = %d", hostname, port)
+	if err = proxysqlDB.QueryRow(checkQuery).Scan(&count); err != nil {
 		return fmt.Errorf("failed to check existing server: %w", err)
 	}
 
-	if count != 0 {
-
-		log.Printf("ProxySQL server already exists: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
-		log.Default().Printf("Update the server details ")
-		// Update existing server details
-		updateQuery := fmt.Sprintf("UPDATE pgsql_servers SET hostgroup_id = %d, port = %d WHERE hostname = '%s'", hostgroupID, port, hostname)
-		_, err = proxysqlDB.Exec(updateQuery)
-
-		// Load and save to persist changes
-		_, err = proxysqlDB.Exec("LOAD PGSQL SERVERS TO RUNTIME")
-		if err != nil {
-			return fmt.Errorf("failed to load servers to runtime: %w", err)
+	if count == 0 {
+		insertQuery := fmt.Sprintf("INSERT INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (%d, '%s', %d)", hostgroupID, hostname, port)
+		if _, err = proxysqlDB.Exec(insertQuery); err != nil {
+			return fmt.Errorf("failed to insert server: %w", err)
 		}
-		_, err = proxysqlDB.Exec("SAVE PGSQL SERVERS TO DISK")
-		if err != nil {
-			return fmt.Errorf("failed to save servers to disk: %w", err)
-		}
+		log.Printf("ProxySQL server was missing, registered: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
 	} else {
-		log.Printf("No Need to update ProxySQL server: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
+		var current int
+		hgQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_servers WHERE hostgroup_id = %d AND hostname = '%s' AND port = %d", hostgroupID, hostname, port)
+		if err = proxysqlDB.QueryRow(hgQuery).Scan(&current); err != nil {
+			return fmt.Errorf("failed to check server hostgroup: %w", err)
+		}
+		if current != 0 {
+			log.Printf("No Need to update ProxySQL server: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
+			return nil
+		}
+		updateQuery := fmt.Sprintf("UPDATE pgsql_servers SET hostgroup_id = %d WHERE hostname = '%s' AND port = %d", hostgroupID, hostname, port)
+		if _, err = proxysqlDB.Exec(updateQuery); err != nil {
+			return fmt.Errorf("failed to update server hostgroup: %w", err)
+		}
+		log.Printf("ProxySQL server moved to hostgroup=%d: hostname=%s, port=%d", hostgroupID, hostname, port)
 	}
 
+	if _, err = proxysqlDB.Exec("LOAD PGSQL SERVERS TO RUNTIME"); err != nil {
+		return fmt.Errorf("failed to load servers to runtime: %w", err)
+	}
+	if _, err = proxysqlDB.Exec("SAVE PGSQL SERVERS TO DISK"); err != nil {
+		return fmt.Errorf("failed to save servers to disk: %w", err)
+	}
 	return nil
+}
+
+// ensureClearTextAuth keeps pgsql-authentication_method at 1 (clear text). The AuthNull MFA hook
+// in ProxySQL runs only on the clear-text path; at the default (3, SCRAM-SHA-256) every login is
+// refused with "Access denied ... (using password: YES)" and authn-service is never called.
+// Best effort: a failure is logged, and the next cycle tries again.
+func ensureClearTextAuth(proxysqlDB *sql.DB) {
+	var current string
+	err := proxysqlDB.QueryRow("SELECT variable_value FROM runtime_global_variables WHERE variable_name = 'pgsql-authentication_method'").Scan(&current)
+	if err == nil && current == "1" {
+		return
+	}
+	for _, q := range []string{
+		"SET pgsql-authentication_method = 1",
+		"LOAD PGSQL VARIABLES TO RUNTIME",
+		"SAVE PGSQL VARIABLES TO DISK",
+	} {
+		if _, err := proxysqlDB.Exec(q); err != nil {
+			log.Printf("ProxySQL: could not set clear-text auth (%s): %v", q, err)
+			return
+		}
+	}
+	log.Printf("ProxySQL: pgsql-authentication_method was %q, set to 1 (clear text)", current)
 }
 
 // RemoveHostFromProxySQL removes a database host from ProxySQL pgsql_servers table

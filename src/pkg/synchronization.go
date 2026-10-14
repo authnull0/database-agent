@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strconv"
 
 	_ "github.com/lib/pq" // Import PostgreSQL driver
 )
@@ -123,7 +124,13 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 			continue
 		}
 
-		err = UpdateHostInProxySQL(config, config.Host, hostGroupId, 5432)
+		// The configured port, not a literal 5432: a database on another port was registered at
+		// the wrong address and never matched.
+		dbPort, convErr := strconv.Atoi(config.Port)
+		if convErr != nil || dbPort == 0 {
+			dbPort = 5432
+		}
+		err = UpdateHostInProxySQL(config, config.Host, hostGroupId, dbPort)
 		if err != nil {
 			log.Printf("Failed to update host in ProxySQL for database %s: %v", dbName, err)
 		}
