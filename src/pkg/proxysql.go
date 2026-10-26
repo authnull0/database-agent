@@ -10,7 +10,11 @@ import (
 // For legacy single-host mode, it registers the default host
 func ConnectToProxysqlDB(config DBConfig) (*sql.DB, error) {
 	// Very simple, direct MySQL connection to ProxySQL
-	dsn := "admin,test:admin@tcp(127.0.0.1:6032)/"
+	// interpolateParams=true makes the driver substitute placeholders client-side
+	// with correct MySQL escaping, instead of sending a prepared statement.
+	// ProxySQL's admin interface supports only a subset of the protocol, so this
+	// keeps "?" placeholders usable there without relying on server-side prepare.
+	dsn := "admin,test:admin@tcp(127.0.0.1:6032)/?interpolateParams=true"
 
 	// Explicitly use "mysql" driver for ProxySQL
 	db, err := sql.Open("mysql", dsn)
