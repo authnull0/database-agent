@@ -19,39 +19,7 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 	// Agent VM IP for agent_vm_ip (AGENT_VM_IP -> private IP; never the public/ipify address)
 	publicIP := AgentIdentity(config)
 
-	// PostgreSQL uses different system catalogs for privilege information
-	query = `
-	SELECT
-		r.rolname AS username,
-		'%' AS host,  -- PostgreSQL doesn't have host concepts like MySQL, using % for compatibility
-		CASE 
-			WHEN r.rolsuper THEN 'ALL PRIVILEGES'
-			ELSE string_agg(
-				CASE
-					WHEN has_database_privilege(r.rolname, current_database(), 'CREATE') THEN 'CREATE'
-					WHEN has_database_privilege(r.rolname, current_database(), 'CONNECT') THEN 'CONNECT'
-					WHEN has_database_privilege(r.rolname, current_database(), 'TEMPORARY') THEN 'TEMPORARY'
-					ELSE ''
-				END, ', '
-			)
-		END AS privileges,
-		CASE 
-			WHEN r.rolsuper THEN 'Admin'
-			WHEN r.rolcreaterole OR r.rolcreatedb THEN 'Admin'
-			ELSE 'User'
-		END AS role
-	FROM 
-		pg_roles r
-	WHERE 
-		r.rolname NOT IN ('postgres', 'pg_signal_backend', 'pg_read_all_settings', 
-						  'pg_read_all_stats', 'pg_stat_scan_tables', 'pg_monitor', 
-						  'pg_database_owner')
-		AND r.rolcanlogin = true
-	GROUP BY 
-		r.rolname, r.rolsuper, r.rolcreaterole, r.rolcreatedb
-	ORDER BY 
-		r.rolname;
-	`
+	query = rolePrivilegesQuery
 
 	// Execute query to get user privileges at the database level
 	rows, err := db.Query(query)
@@ -62,7 +30,10 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 
 	for rows.Next() {
 		var username, host, role, privileges string
-		if err := rows.Scan(&username, &host, &privileges, &role); err != nil {
+		var attrs roleAttributes
+		if err := rows.Scan(&username, &host, &privileges, &role,
+			&attrs.Super, &attrs.CreateRole, &attrs.CreateDB, &attrs.Replication, &attrs.BypassRLS,
+			&attrs.ServerAccess, &attrs.AllData); err != nil {
 			return err
 		}
 
@@ -78,9 +49,11 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 			"host":         host,
 			"role":         role,
 			"privilege":    privileges,
-			"instanceId":   instanceId,
-			"agentVmIp":    publicIP,    // Multi-host: Agent VM IP (where ProxySQL runs)
-			"hostVmIp":     config.Host, // Multi-host: Database host VM IP
+			// For policies' privilege condition: admin, elevated or standard (privilegelevel.go).
+			"privilegeLevel": privilegeLevel(attrs),
+			"instanceId":     instanceId,
+			"agentVmIp":      publicIP,    // Multi-host: Agent VM IP (where ProxySQL runs)
+			"hostVmIp":       config.Host, // Multi-host: Database host VM IP
 		}
 
 		userPayloadBytes, err := json.Marshal(userPayload)
@@ -120,3 +93,38 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 
 	return nil
 }
+
+// rolePrivilegesQuery lists the login roles with their database privileges, the console's Admin/User
+// label, and the attributes privilegeLevel reads.
+var rolePrivilegesQuery = `
+	SELECT
+		r.rolname AS username,
+		'%' AS host,  -- PostgreSQL doesn't have host concepts like MySQL, using % for compatibility
+		CASE 
+			WHEN r.rolsuper THEN 'ALL PRIVILEGES'
+			ELSE string_agg(
+				CASE
+					WHEN has_database_privilege(r.rolname, current_database(), 'CREATE') THEN 'CREATE'
+					WHEN has_database_privilege(r.rolname, current_database(), 'CONNECT') THEN 'CONNECT'
+					WHEN has_database_privilege(r.rolname, current_database(), 'TEMPORARY') THEN 'TEMPORARY'
+					ELSE ''
+				END, ', '
+			)
+		END AS privileges,
+		CASE 
+			WHEN r.rolsuper THEN 'Admin'
+			WHEN r.rolcreaterole OR r.rolcreatedb THEN 'Admin'
+			ELSE 'User'
+		END AS role` + roleAttributesColumns + `
+	FROM 
+		pg_roles r
+	WHERE 
+		r.rolname NOT IN ('postgres', 'pg_signal_backend', 'pg_read_all_settings', 
+						  'pg_read_all_stats', 'pg_stat_scan_tables', 'pg_monitor', 
+						  'pg_database_owner')
+		AND r.rolcanlogin = true
+	GROUP BY 
+		r.oid, r.rolname, r.rolsuper, r.rolcreaterole, r.rolcreatedb, r.rolreplication, r.rolbypassrls
+	ORDER BY 
+		r.rolname;
+	`
