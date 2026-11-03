@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -99,6 +100,24 @@ func dropRole(t *testing.T, admin *sql.DB, role string) {
 	})
 }
 
+// provisionNoProxy provisions without registering in ProxySQL, as most tests here need.
+func provisionNoProxy(admin *sql.DB, dbName, role string, privs, tables []string) (string, error) {
+	return ProvisionBackendRole(admin, nil, "test-host", dbName, role, privs, tables, 0, time.Now(), DefaultPasswordRotation)
+}
+
+// canLoginAs reports whether role can log in with password, without changing anything.
+func canLoginAs(t *testing.T, base *url.URL, role, password string) bool {
+	t.Helper()
+	u := *base
+	u.User = url.UserPassword(role, password)
+	db, err := sql.Open("postgres", u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	return db.Ping() == nil
+}
+
 func mustFail(t *testing.T, db *sql.DB, what, sql string) {
 	t.Helper()
 	if _, err := db.Exec(sql); err == nil {
@@ -121,7 +140,7 @@ func TestPostgresBackendRoleRead(t *testing.T) {
 	dbName := strings.TrimPrefix(base.Path, "/")
 	privs, tables := []string{"READ"}, []string{"br_customers", "br_orders"}
 
-	name, err := ProvisionBackendRole(admin, nil, dbName, "app_role", privs, tables, 0)
+	name, err := provisionNoProxy(admin, dbName, "app_role", privs, tables)
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
@@ -131,7 +150,7 @@ func TestPostgresBackendRoleRead(t *testing.T) {
 	dropRole(t, admin, name)
 
 	// Idempotent: a second run (every checkout) succeeds and changes nothing that matters.
-	if again, err := ProvisionBackendRole(admin, nil, dbName, "app_role", privs, tables, 0); err != nil || again != name {
+	if again, err := provisionNoProxy(admin, dbName, "app_role", privs, tables); err != nil || again != name {
 		t.Fatalf("second provision: %q %v", again, err)
 	}
 
@@ -163,7 +182,7 @@ func TestPostgresBackendRoleReadWrite(t *testing.T) {
 	dbName := strings.TrimPrefix(base.Path, "/")
 	privs, tables := []string{"READ", "WRITE"}, []string{"br_customers"}
 
-	name, err := ProvisionBackendRole(admin, nil, dbName, "app_role", privs, tables, 0)
+	name, err := provisionNoProxy(admin, dbName, "app_role", privs, tables)
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
@@ -181,8 +200,75 @@ func TestPostgresBackendRoleReadWrite(t *testing.T) {
 func TestPostgresBackendRoleNotForExecute(t *testing.T) {
 	admin, base := agentTestDB(t)
 	dbName := strings.TrimPrefix(base.Path, "/")
-	name, err := ProvisionBackendRole(admin, nil, dbName, "app_role", []string{"READ", "WRITE", "EXECUTE"}, []string{"br_customers"}, 0)
+	name, err := provisionNoProxy(admin, dbName, "app_role", []string{"READ", "WRITE", "EXECUTE"}, []string{"br_customers"})
 	if err != nil || name != "" {
 		t.Fatalf("EXECUTE policy: %q %v, want no role", name, err)
 	}
+}
+
+// The restricted role's password is a managed role password like any other (S4): 32 characters
+// from crypto/rand, kept across checkouts until it is due, then rotated -- at checkout or by the
+// scheduled sweep, which finds the role through the rotation record in pgsql_users.
+func TestPostgresBackendRolePasswordRotation(t *testing.T) {
+	admin, base := agentTestDB(t)
+	dbName := strings.TrimPrefix(base.Path, "/")
+	privs, tables := []string{"READ"}, []string{"br_customers"}
+	proxy := newFakeProxy()
+	t0 := time.Now()
+	day := 24 * time.Hour
+
+	name, err := ProvisionBackendRole(admin, proxy, "h1", dbName, "app_role", privs, tables, 7, t0, day)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	dropRole(t, admin, name)
+	u1, found, _ := proxy.Get(name)
+	if !found || len(u1.Password) != rolePasswordLength || u1.DefaultHostgroup != 7 {
+		t.Fatalf("ProxySQL row %+v (found %v), want a %d-character password on hostgroup 7", u1, found, rolePasswordLength)
+	}
+	if h, rotated, ok := parseRotationComment(u1.Comment); !ok || h != "h1" || !rotated.Equal(time.Unix(t0.Unix(), 0)) {
+		t.Fatalf("rotation record %q, want host h1 rotated at %d", u1.Comment, t0.Unix())
+	}
+	if !canLoginAs(t, base, name, u1.Password) {
+		t.Fatal("the role does not accept the password ProxySQL holds")
+	}
+
+	// A checkout before the password is due keeps it and its rotation time.
+	if _, err := ProvisionBackendRole(admin, proxy, "h1", dbName, "app_role", privs, tables, 7, t0.Add(time.Hour), day); err != nil {
+		t.Fatalf("second provision: %v", err)
+	}
+	if u2, _, _ := proxy.Get(name); u2.Password != u1.Password || u2.Comment != u1.Comment {
+		t.Errorf("a checkout before the password was due changed it: %+v -> %+v", u1, u2)
+	}
+
+	// A checkout after it is due rotates it; the old one stops working.
+	if _, err := ProvisionBackendRole(admin, proxy, "h1", dbName, "app_role", privs, tables, 7, t0.Add(25*time.Hour), day); err != nil {
+		t.Fatalf("provision when due: %v", err)
+	}
+	u3, _, _ := proxy.Get(name)
+	if u3.Password == u1.Password {
+		t.Fatal("a checkout after the password was due kept it")
+	}
+	if !canLoginAs(t, base, name, u3.Password) || canLoginAs(t, base, name, u1.Password) {
+		t.Fatal("after rotation the role must take the new password and refuse the old one")
+	}
+
+	// The scheduled sweep rotates it too, and the role stays a restricted one.
+	rotated, err := RotateDuePasswords(admin, proxy, "h1", t0.Add(50*time.Hour), day)
+	if err != nil || len(rotated) != 1 || rotated[0] != name {
+		t.Fatalf("scheduled rotation: %v %v, want [%s]", rotated, err, name)
+	}
+	u4, _, _ := proxy.Get(name)
+	if u4.Password == u3.Password || u4.DefaultHostgroup != 7 || !canLoginAs(t, base, name, u4.Password) {
+		t.Fatalf("after the sweep: %+v", u4)
+	}
+	var inherit, member bool
+	if err := admin.QueryRow(`SELECT rolinherit, pg_has_role($1, $2, 'MEMBER') FROM pg_roles WHERE rolname = $1`,
+		name, BackendRolesGroup).Scan(&inherit, &member); err != nil {
+		t.Fatal(err)
+	}
+	if inherit || !member {
+		t.Errorf("after rotation: inherit %v (want false), member of %s %v (want true)", inherit, BackendRolesGroup, member)
+	}
+	mustFail(t, loginAs(t, admin, base, name), "insert after rotation", "INSERT INTO br_customers (name) VALUES ('x')")
 }

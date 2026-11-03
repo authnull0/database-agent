@@ -106,7 +106,9 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) 
 
 // LastActive updates the last active time of the database agent
 // Compatible with both MySQL and PostgreSQL
-func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig) error {
+// LastActive reports the agent alive for a database. directAccess, when not nil, is this sync's
+// verdict on direct access to the server (directaccess.go), shown in the console.
+func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig, directAccess *DirectAccessReport) error {
 	log.Default().Printf("Instance Id after last active api call: %v", instanceId)
 
 	orgID, _ := strconv.Atoi(config.OrgID)
@@ -120,6 +122,9 @@ func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig) e
 		"tenantId":   tenantID,
 		"instanceId": instanceId,
 		"dbType":     config.DBType, // This will be "postgres" for PostgreSQL
+	}
+	if directAccess != nil {
+		payload["directAccess"] = directAccess
 	}
 
 	payloadBytes, err := json.Marshal(payload)

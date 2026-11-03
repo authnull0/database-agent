@@ -88,6 +88,16 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		}
 
 		databases = append(databases, dbName)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+
+	// Can anything but the proxy log in as a managed role? Once per sync: pg_hba.conf is per server.
+	directAccess := CheckDirectAccessForHost(db, config, databases)
+
+	for _, dbName := range databases {
 		log.Printf("Processing database: %s", dbName)
 
 		// Register the database agent and get its ID
@@ -104,7 +114,7 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 			continue // Skip this database if registration failed
 		}
 
-		err = LastActive(instanceId, db, dbName, config)
+		err = LastActive(instanceId, db, dbName, config, directAccess)
 		if err != nil {
 			log.Printf("Failed to get last active time of the database %s: %v", dbName, err)
 		}

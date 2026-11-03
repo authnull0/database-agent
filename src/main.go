@@ -101,6 +101,10 @@ func startAgent(exit chan struct{}) {
 	if err != nil {
 		log.Default().Println(err)
 	}
+	// Refuse a bad rotation setting at start rather than at the first checkout.
+	if _, err := pkg.PasswordRotationInterval(config.PasswordRotationHours); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
 	dsCfg, err := LoadDataSource()
 	if err != nil {
 		log.Fatalf("Failed to load data-source.yaml: %v", err)
@@ -138,6 +142,8 @@ func startAgent(exit chan struct{}) {
 			Password:   password,
 			Port:       db.Port,
 			DBType:     db.Type,
+
+			PasswordRotationHours: config.PasswordRotationHours,
 		}
 
 		conn, err = pkg.ConnectToDB(cfg)
@@ -176,6 +182,9 @@ func startAgent(exit chan struct{}) {
 
 				if err := pkg.FetchDatabaseDetails(h.Conn, h.Cfg); err != nil {
 					log.Printf("Sync failed for %s: %v", h.Cfg.Host, err)
+				}
+				if err := pkg.RotateDuePasswordsForHost(h.Conn, h.Cfg, time.Now()); err != nil {
+					log.Printf("Password rotation failed for %s: %v", h.Cfg.Host, err)
 				}
 			}
 			log.Default().Println("DB Synchronization Completed.")
