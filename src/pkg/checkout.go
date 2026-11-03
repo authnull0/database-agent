@@ -433,6 +433,11 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	}
 	log.Printf("Password for user %s updated successfully in ProxySQL", dbUserName)
 
+	// The restricted role for this policy (READ and/or WRITE): the database itself refuses what the
+	// policy did not grant. See backendrole.go. Not fatal: without it ProxySQL uses the policy's own
+	// role (backend_roles = prefer) or refuses the session (enforce).
+	provisionPolicyBackendRole(Config, proxySQLDB, dbName, dbUserName, policyDetails, hostgroupID)
+
 	_, err = proxySQLDB.Exec("LOAD PGSQL USERS TO RUNTIME;")
 	if err != nil {
 		log.Printf("Error loading users to runtime in ProxySQL: %v", err)

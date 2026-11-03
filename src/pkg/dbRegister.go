@@ -59,13 +59,13 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) 
 	}
 	log.Default().Println("====================================")
 
-	log.Default().Println("Database Register Agent Payload", payload)
+	log.Default().Println("Database Register Agent Payload", payloadForLog(payload))
 
 	log.Default().Println("====================================")
 
 	apiURL := config.API + "/api/v1/databaseService/registerDbAgent"
 	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
-	log.Printf("Payload Sent: %s", string(payloadBytes))
+	log.Printf("Payload Sent: %s", jsonForLog(payloadBytes))
 
 	if err != nil {
 		log.Printf("Error while creating request: %v", err)
@@ -94,9 +94,8 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) 
 		log.Println("UnMarshalling Error !", errMarsh)
 	}
 
-	fmt.Println("Machine Registered Response", string(body), data.InstanceId, data.Code)
-
-	fmt.Println("Printing Data Obj ", data)
+	// Not the raw body: what an operator needs is the instance and the result.
+	log.Printf("Machine registered: instance %v, code %v", data.InstanceId, data.Code)
 
 	instanceId := data.InstanceId
 	agentStatus := data.AgentStatus
@@ -134,7 +133,7 @@ func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig) e
 
 	apiURL := config.API + "/api/v1/databaseService/updateLastActive"
 	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
-	log.Printf("Payload Sent: %s", string(payloadBytes))
+	log.Printf("Payload Sent: %s", jsonForLog(payloadBytes))
 
 	if err != nil {
 		log.Printf("Error while creating request: %v", err)
@@ -153,6 +152,6 @@ func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig) e
 	if err != nil {
 		log.Printf("Error while reading response body: %v", err)
 	}
-	log.Default().Printf("Response from external service: %v", string(body))
+	log.Default().Printf("Response from external service: %v", jsonForLog(body))
 	return nil
 }

@@ -90,7 +90,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 
 	apiURL := config.API + "/api/v1/databaseService/dbSync"
 	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
-	log.Printf("Payload Sent: %s", string(payloadBytes))
+	log.Printf("Payload Sent: %s", jsonForLog(payloadBytes))
 
 	if err != nil {
 		log.Printf("Error while creating request: %v", err)
@@ -109,7 +109,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	if err != nil {
 		log.Printf("Error while reading response body: %v", err)
 	}
-	log.Default().Printf("Response from external service: %v", string(body))
+	log.Default().Printf("Response from external service: %v", jsonForLog(body))
 
 	errMarsh := json.Unmarshal([]byte(string(body)), &data)
 
@@ -117,7 +117,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 		log.Println("UnMarshalling Error !", errMarsh)
 	}
 
-	log.Default().Println("DbSync Response", string(body), data.HostGroupId, data.Code)
+	log.Default().Println("DbSync Response", jsonForLog(body), data.HostGroupId, data.Code)
 
 	log.Default().Println("Printing Data Obj ", data)
 

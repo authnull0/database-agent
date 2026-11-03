@@ -126,7 +126,7 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 
 	bodyBytes, err := io.ReadAll(res.Body)
 	log.Println("API Response:", string(bodyBytes))
-	log.Println("Payload Sent:", string(payloadBytes))
+	log.Println("Payload Sent:", jsonForLog(payloadBytes))
 
 	return nil
 }

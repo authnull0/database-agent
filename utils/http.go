@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -37,29 +38,32 @@ func GetPrivateIP() (string, error) {
 }
 
 func DecryptPassword(enc, key string) (string, error) {
-	log.Printf("Decrypting password %s using key %s", enc, key)
-
 	if !strings.HasPrefix(enc, "ENC(") {
 		return enc, nil
 	}
-
 	enc = strings.TrimSuffix(strings.TrimPrefix(enc, "ENC("), ")")
-	log.Printf("Stripped encrypted password: %s", enc)
+	// Neither the ciphertext nor the key is logged: together they are the password.
+	log.Printf("Decrypting a stored database password (%d characters)", len(enc))
 
+	cmd := decryptCommand(enc, key)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("openssl decrypt failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// decryptCommand runs openssl with the key in its environment, not on its command line, where any
+// local user could read it in the process list while openssl runs.
+func decryptCommand(enc, key string) *exec.Cmd {
 	cmd := exec.Command(
 		"openssl", "enc",
 		"-aes-256-cbc",
 		"-a", "-A", "-d",
 		"-pbkdf2", "-iter", "100000",
-		"-pass", "pass:"+key,
+		"-pass", "env:AUTHNULL_DECRYPT_KEY",
 	)
-
+	cmd.Env = append(os.Environ(), "AUTHNULL_DECRYPT_KEY="+key)
 	cmd.Stdin = strings.NewReader(enc)
-
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("openssl decrypt failed: %v: %s", err, out)
-	}
-	//log.Printf("Decrypted password: %s", out)
-	return strings.TrimSpace(string(out)), nil
+	return cmd
 }
