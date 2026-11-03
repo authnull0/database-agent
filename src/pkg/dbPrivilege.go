@@ -94,7 +94,7 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 
 		httpReq, err := http.NewRequest("POST", userAPIURL, bytes.NewBuffer(userPayloadBytes))
 		log.Println("Payload Sent:")
-		log.Println(string(userPayloadBytes))
+		log.Println(jsonForLog(userPayloadBytes))
 
 		if err != nil {
 			log.Printf("Error while creating user request: %v", err)
