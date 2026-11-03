@@ -61,6 +61,30 @@ next checkout, which adopts them.
 The restricted `an_…` roles the agent makes for READ/WRITE policies (see `src/pkg/backendrole.go`)
 are managed roles too: same generator, same rotation record, rotated on the same schedule.
 
+## Passwords held in the vault
+
+For roles an administrator manages from the console (Database → Users → Manage password),
+AuthNull's backend generates the password and keeps it in its vault; the agent applies it. On
+every sync the agent:
+
+1. claims its database server's password jobs (`/api/v1/databaseService/agent/jobs/claim`);
+2. fetches each password (`…/jobs/secret`, released only to this install, while it holds the job);
+3. sets it with `ALTER ROLE`, then in ProxySQL's `pgsql_users`;
+4. reports the result (`…/jobs/result`).
+
+It never creates a role this way, and refuses a job for a server it does not serve.
+
+**Requirements:** only an agent with its install's credential takes part (see Identity), and only
+for Postgres for now.
+
+**Afterwards:** such a role is marked `authnull:vault;host=…;rotated=…` in `pgsql_users`. The
+agent's own rotation leaves it alone: the sweep skips it, and checkout returns its password
+unchanged.
+
+**If ProxySQL fails:** when the database took the password but ProxySQL could not be written, even
+on a retry, the job is reported done with a warning, so the vault keeps the password the database
+really has. The next rotation repairs ProxySQL.
+
 ## Tests
 
     go test ./...

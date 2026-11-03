@@ -357,6 +357,19 @@ func EnsureRolePassword(pg *sql.DB, proxy proxyUsers, role, host string, hostgro
 	if err != nil {
 		return "", fmt.Errorf("checking role: %w", err)
 	}
+	// A vault-managed role keeps the vault's password: checkout never rotates it (vaultjobs.go).
+	if found && isVaultManaged(u.Comment) {
+		if !exists {
+			return "", fmt.Errorf("role %q is managed in the vault but does not exist in the database", role)
+		}
+		if u.DefaultHostgroup != hostgroup {
+			u.DefaultHostgroup = hostgroup
+			if err := proxy.Put(u); err != nil {
+				return "", fmt.Errorf("updating ProxySQL hostgroup: %w", err)
+			}
+		}
+		return u.Password, nil
+	}
 	if found && exists && !rotationDue(u, now, interval) {
 		if u.DefaultHostgroup != hostgroup {
 			u.DefaultHostgroup = hostgroup
@@ -382,7 +395,8 @@ func RotateDuePasswords(pg *sql.DB, proxy proxyUsers, host string, now time.Time
 	var errs []string
 	for _, u := range users {
 		h, _, ok := parseRotationComment(u.Comment)
-		if !ok || h != host || !rotationDue(u, now, interval) {
+		// A vault-managed role's password is the backend's (vaultjobs.go): never replaced here.
+		if !ok || h != host || isVaultManaged(u.Comment) || !rotationDue(u, now, interval) {
 			continue
 		}
 		if _, err := rotateRolePassword(pg, proxy, u.Username, host, u.DefaultHostgroup, now); err != nil {
