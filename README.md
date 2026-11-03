@@ -38,8 +38,11 @@ ProxySQL logs in to the database for them. The agent gives each role a 32-charac
 - at checkout, when the password is due, the role is missing, or the row predates rotation;
 - on every sync, for each managed role on that host whose password is due.
 
-`PASSWORD_ROTATION_HOURS` in `db.env` sets the interval (a whole number of hours, at least 1,
-default 24). The last rotation is recorded in the role's `pgsql_users.comment`
+The interval is set per tenant in the AuthNull console (Databases settings: password rotation,
+1 to 8760 hours, default 24). The agent learns it from the response to its last-active report on
+every sync, and keeps the interval it has when a report fails or the answer is missing or out of
+range. `PASSWORD_ROTATION_HOURS` in `db.env` is no longer read; the agent logs a warning if it is
+still there. The last rotation is recorded in the role's `pgsql_users.comment`
 (`authnull:host=<host>;rotated=<unix time>`). Rows without that record are left alone until their
 next checkout, which adopts them.
 

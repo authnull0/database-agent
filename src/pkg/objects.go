@@ -15,8 +15,6 @@ type DBConfig struct {
 	Key          string `mapstructure:"KEY"`           // Authentication key
 	MachineKey   string `mapstructure:"MACHINE_KEY"`   // Machine identifier
 	AgentVMIP    string `mapstructure:"AGENT_VM_IP"`   // Agent VM IP address (for multi-host mode)
-	// PasswordRotationHours is how often managed role passwords are rotated (empty: 24).
-	PasswordRotationHours string `mapstructure:"PASSWORD_ROTATION_HOURS"`
 }
 
 // InstanceCreatedResponse contains the response from the register agent API
