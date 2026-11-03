@@ -76,7 +76,7 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) 
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
-	httpResp, err := client.Do(httpReq)
+	httpResp, err := doAPI(client, httpReq)
 	if err != nil {
 		log.Printf("Error while making request: %v", err)
 
@@ -138,7 +138,7 @@ func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig, d
 	log.Printf("Payload Sent: %s", jsonForLog(payloadBytes))
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err := (&http.Client{Timeout: 30 * time.Second}).Do(httpReq)
+	httpResp, err := doAPI(&http.Client{Timeout: 30 * time.Second}, httpReq)
 	if err != nil {
 		return fmt.Errorf("last active: %w", err)
 	}

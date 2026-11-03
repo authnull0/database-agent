@@ -128,7 +128,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := doAPI(client, req)
 	if err != nil {
 		return err
 	}
@@ -203,7 +203,7 @@ func PollCheckoutJob(db *sql.DB, dbName string, Config DBConfig) error {
 			}
 			updateJobReq.Header.Set("Content-Type", "application/json")
 			updateJobClient := &http.Client{}
-			updateJobResp, err := updateJobClient.Do(updateJobReq)
+			updateJobResp, err := doAPI(updateJobClient, updateJobReq)
 			if err != nil {
 				return err
 			}
@@ -244,7 +244,7 @@ func FetchPolicyDetails(api string, orgID int, tenantID int, policyID uuid.UUID)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doAPI(http.DefaultClient, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute HTTP request: %w", err)
 	}

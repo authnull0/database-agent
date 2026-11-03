@@ -99,7 +99,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
-	httpResp, err := client.Do(httpReq)
+	httpResp, err := doAPI(client, httpReq)
 	if err != nil {
 		log.Printf("Error while making request: %v", err)
 	}
