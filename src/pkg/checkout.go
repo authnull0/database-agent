@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-
-	"math/rand"
 	"net/http"
 	"strconv"
 	"time"
@@ -299,156 +297,30 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		return false, errors.New("no privileges found in policy details")
 	}
 
-	var password string
+	interval, err := PasswordRotationInterval(Config.PasswordRotationHours)
+	if err != nil {
+		return false, err
+	}
 	proxySQLDB, err := ConnectToProxysqlDB(Config)
 	if err != nil {
 		log.Printf("Error while connecting to ProxySQL database: %v", err)
 		return false, err
 	}
+	defer proxySQLDB.Close()
+	proxyUsers := adminProxyUsers{proxySQLDB}
+	now := time.Now()
 
-	// Before checking the password, first verify the user exists
-	var userExists int
-	passwordReused := false
-	checkUserExistsQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_users WHERE username = '%s'", dbUserName)
-	err = proxySQLDB.QueryRow(checkUserExistsQuery).Scan(&userExists)
-	if err != nil {
-		log.Printf("Error checking if user exists in ProxySQL: %v", err)
+	// Creates the role, or rotates its password when it's due; otherwise keeps the one ProxySQL
+	// already holds. The password itself goes nowhere else (see below).
+	if _, err := EnsureRolePassword(db, proxyUsers, dbUserName, Config.Host, hostgroupID, now, interval); err != nil {
+		log.Printf("Error while preparing managed role %q: %v", dbUserName, err)
 		return false, err
 	}
-
-	// If the user and password exist, we can skip password generation and just update the hostgroup if needed
-	if userExists > 0 {
-		// User exists, let's get the password
-		var existingPassword string
-		checkExistingPasswordQuery := fmt.Sprintf("SELECT password FROM pgsql_users WHERE username = '%s'", dbUserName)
-		err = proxySQLDB.QueryRow(checkExistingPasswordQuery).Scan(&existingPassword)
-		if err != nil {
-			log.Printf("Error retrieving password for user %s: %v", dbUserName, err)
-			return false, err
-		}
-
-		if existingPassword != "" {
-			log.Printf("Existing password found for user %s, skipping password rotation", dbUserName)
-			password = existingPassword
-			passwordReused = true
-		} else {
-			log.Printf("User exists but has empty password, generating new one")
-			password, err = GenerateRandomPassword(16)
-			if err != nil {
-				return false, err
-			}
-		}
-	} else {
-		// User doesn't exist, generate new password
-		password, err = GenerateRandomPassword(16)
-		if err != nil {
-			return false, err
-		}
-	}
-
-	// PostgreSQL conversion: Check if user exists
-	var dbhost string
-	// In PostgreSQL, we don't need host info for the user, just check if role exists
-	err = db.QueryRow("SELECT rolname FROM pg_roles WHERE rolname = $1 LIMIT 1", dbUserName).Scan(&dbhost)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			log.Printf("User %s doesn't exist in PostgreSQL", dbUserName)
-			dbhost = "" // Not used in PostgreSQL but keeping the variable
-		} else {
-			log.Printf("Error fetching user info for %s: %v", dbUserName, err)
-			return false, err
-		}
-	}
-
-	// Check if the user exists
-	checkUserQuery1 := fmt.Sprintf("SELECT COUNT(*) FROM pg_roles WHERE rolname = '%s'", dbUserName)
-	alterPasswdQuery := fmt.Sprintf("ALTER ROLE %s WITH PASSWORD '%s'", dbUserName, password)
-	updatePasswordQuery := fmt.Sprintf("UPDATE pgsql_users SET password = '%s' WHERE username = '%s'", password, dbUserName)
-
-	var userCount1 int
-	err = db.QueryRow(checkUserQuery1).Scan(&userCount1)
-	if err != nil {
-		log.Printf("Error checking user: %v", err)
-		return false, err
-	}
-
-	if userCount1 == 0 {
-		// Create role in PostgreSQL
-		createUserQuery := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD '%s'", dbUserName, password)
-		_, err = db.Exec(createUserQuery)
-		if err != nil {
-			log.Printf("Error creating user: %v", err)
-			return false, err
-		}
-	} else if !passwordReused {
-		// Only ALTER ROLE when password is newly generated, not when reusing existing ProxySQL password
-		_, err = db.Exec(alterPasswdQuery)
-		if err != nil {
-			log.Printf("Error updating password: %v", err)
-			return false, err
-		}
-		log.Printf("Password updated successfully for user %s", dbUserName)
-	} else {
-		log.Printf("User %s already exists with correct password, skipping ALTER ROLE", dbUserName)
-	}
-
-	// Check if the user already exists in ProxySQL
-	checkUserQuery := fmt.Sprintf("SELECT COUNT(*) FROM pgsql_users WHERE username = '%s'", dbUserName)
-	var userCount2 int
-	err = proxySQLDB.QueryRow(checkUserQuery).Scan(&userCount2)
-	if err != nil {
-		log.Printf("Error while checking existence of user %s in ProxySQL: %v", dbUserName, err)
-		return false, err
-	}
-
-	if userCount2 == 0 {
-		// Create the user if it does not exist
-		// Include default_hostgroup for multi-host routing
-		var createUserQuery string
-		createUserQuery = fmt.Sprintf("INSERT INTO pgsql_users (username, password, default_hostgroup, active, use_ssl) VALUES ('%s', '%s', %d, 1, 0)", dbUserName, password, hostgroupID)
-
-		_, err = proxySQLDB.Exec(createUserQuery)
-
-		if err != nil {
-			log.Printf("Error while creating user %s in ProxySQL: %v", dbUserName, err)
-			return false, err
-		}
-		log.Printf("User %s created successfully in ProxySQL with hostgroup=%d", dbUserName, hostgroupID)
-	} else {
-		// User exists, update hostgroup if provided
-		if hostgroupID > 0 {
-			updateHostgroupQuery := fmt.Sprintf("UPDATE pgsql_users SET default_hostgroup = %d WHERE username = '%s'", hostgroupID, dbUserName)
-			_, err = proxySQLDB.Exec(updateHostgroupQuery)
-			if err != nil {
-				log.Printf("Error updating hostgroup for user %s: %v", dbUserName, err)
-			}
-		}
-	}
-
-	// Update the password for the user in ProxySQL
-	_, err = proxySQLDB.Exec(updatePasswordQuery)
-	if err != nil {
-		log.Printf("Error while updating password for user %s in ProxySQL: %v", dbUserName, err)
-		return false, err
-	}
-	log.Printf("Password for user %s updated successfully in ProxySQL", dbUserName)
 
 	// The restricted role for this policy (READ and/or WRITE): the database itself refuses what the
 	// policy did not grant. See backendrole.go. Not fatal: without it ProxySQL uses the policy's own
 	// role (backend_roles = prefer) or refuses the session (enforce).
-	provisionPolicyBackendRole(Config, proxySQLDB, dbName, dbUserName, policyDetails, hostgroupID)
-
-	_, err = proxySQLDB.Exec("LOAD PGSQL USERS TO RUNTIME;")
-	if err != nil {
-		log.Printf("Error loading users to runtime in ProxySQL: %v", err)
-		return false, err
-	}
-
-	_, err = proxySQLDB.Exec("SAVE PGSQL USERS TO DISK;")
-	if err != nil {
-		log.Printf("Error saving users to disk in ProxySQL: %v", err)
-		return false, err
-	}
+	provisionPolicyBackendRole(Config, proxyUsers, dbName, dbUserName, policyDetails, hostgroupID, now, interval)
 
 	// DID-REMOVAL: the database role IS the credential. Provisioning is complete here.
 	//
@@ -488,15 +360,4 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 	// columns are written as 0 since the issuer lookup was removed from ApproveDatabasePolicy),
 	// and because the deferred gateway-auth work needs the policy id back.
 	return true, nil
-}
-
-func GenerateRandomPassword(length int) (string, error) {
-	// Generate a random password of the given length
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+[]{}|;:,.<>?"
-	b := make([]byte, length)
-	seededRand := rand.New(rand.NewSource(time.Now().UnixNano())) // Seed the random number generator
-	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))] // Select a random character from the charset
-	}
-	return string(b), nil
 }

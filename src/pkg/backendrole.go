@@ -19,7 +19,6 @@ package pkg
 // the session (backend_roles = enforce).
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -27,6 +26,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -96,25 +96,17 @@ func splitTable(t string) (schema, table string) {
 	return "public", strings.ToLower(t)
 }
 
-// randomPassword is 32 hex characters from crypto/rand -- also safe to place in the SQL string
-// literals the ProxySQL admin interface needs, since it has no quote or backslash.
-func randomPassword() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
-}
-
 // ProvisionBackendRole makes the restricted role for a policy and registers it in ProxySQL.
 //
-// target must be connected to the policy's database (table grants are per database). proxy is the
-// ProxySQL admin connection; nil skips registration (tests). The caller loads ProxySQL users to
-// runtime afterwards. Returns the role name, or "" when the policy gets no restricted role.
+// target must be connected to the policy's database (table grants are per database). proxy is
+// ProxySQL's pgsql_users; nil skips registration (tests). host is the database server, recorded
+// with the password so the scheduled rotation (RotateDuePasswords) picks the role up like any
+// other managed role. Returns the role name, or "" when the policy gets no restricted role.
 //
 // Order matters: the role and every grant are made in Postgres first, and only then is the role
 // registered in ProxySQL -- a role ProxySQL can find is always a complete one.
-func ProvisionBackendRole(target, proxy *sql.DB, database, sourceRole string, privileges, tables []string, hostgroupID int) (string, error) {
+func ProvisionBackendRole(target *sql.DB, proxy proxyUsers, host, database, sourceRole string, privileges, tables []string,
+	hostgroupID int, now time.Time, interval time.Duration) (string, error) {
 	name, ok := BackendRoleName(database, sourceRole, privileges, tables)
 	if !ok {
 		return "", nil
@@ -129,20 +121,20 @@ func ProvisionBackendRole(target, proxy *sql.DB, database, sourceRole string, pr
 		}
 	}
 
-	// One password, held by ProxySQL and set on the role: reuse ProxySQL's when it has one.
-	password := ""
+	// One password, held by ProxySQL and set on the role: keep ProxySQL's until it is due for
+	// rotation, so a checkout doesn't reset the clock.
+	password, comment := "", rotationComment(host, now)
 	if proxy != nil {
-		var existing sql.NullString
-		err := proxy.QueryRow(fmt.Sprintf("SELECT password FROM pgsql_users WHERE username = '%s'", name)).Scan(&existing)
-		if err != nil && err != sql.ErrNoRows {
+		u, found, err := proxy.Get(name)
+		if err != nil {
 			return "", fmt.Errorf("read %s from ProxySQL: %w", name, err)
 		}
-		if existing.Valid && isHex(existing.String) {
-			password = existing.String
+		if found && !rotationDue(u, now, interval) {
+			password, comment = u.Password, u.Comment
 		}
 	}
 	if password == "" {
-		p, err := randomPassword()
+		p, err := GenerateRandomPassword(rolePasswordLength)
 		if err != nil {
 			return "", err
 		}
@@ -155,10 +147,10 @@ func ProvisionBackendRole(target, proxy *sql.DB, database, sourceRole string, pr
 		return "", fmt.Errorf("look up role %s: %w", name, err)
 	}
 	if !exists {
-		if _, err := target.Exec(fmt.Sprintf("CREATE ROLE %s LOGIN NOINHERIT PASSWORD '%s'", q, password)); err != nil {
+		if _, err := target.Exec(fmt.Sprintf("CREATE ROLE %s LOGIN NOINHERIT PASSWORD %s", q, pq.QuoteLiteral(password))); err != nil {
 			return "", fmt.Errorf("create role %s: %w", name, err)
 		}
-	} else if _, err := target.Exec(fmt.Sprintf("ALTER ROLE %s WITH LOGIN NOINHERIT PASSWORD '%s'", q, password)); err != nil {
+	} else if _, err := target.Exec(fmt.Sprintf("ALTER ROLE %s WITH LOGIN NOINHERIT PASSWORD %s", q, pq.QuoteLiteral(password))); err != nil {
 		// Always re-set: ProxySQL's copy and the role's must not drift apart.
 		return "", fmt.Errorf("set password of %s: %w", name, err)
 	}
@@ -226,17 +218,8 @@ func ProvisionBackendRole(target, proxy *sql.DB, database, sourceRole string, pr
 	}
 
 	if proxy != nil {
-		var count int
-		if err := proxy.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM pgsql_users WHERE username = '%s'", name)).Scan(&count); err != nil {
-			return "", fmt.Errorf("look up %s in ProxySQL: %w", name, err)
-		}
-		var q2 string
-		if count == 0 {
-			q2 = fmt.Sprintf("INSERT INTO pgsql_users (username, password, default_hostgroup, active, use_ssl) VALUES ('%s', '%s', %d, 1, 0)", name, password, hostgroupID)
-		} else {
-			q2 = fmt.Sprintf("UPDATE pgsql_users SET password = '%s', default_hostgroup = %d, active = 1 WHERE username = '%s'", password, hostgroupID, name)
-		}
-		if _, err := proxy.Exec(q2); err != nil {
+		u := proxyUser{Username: name, Password: password, DefaultHostgroup: hostgroupID, Comment: comment}
+		if err := proxy.Put(u); err != nil {
 			return "", fmt.Errorf("register %s in ProxySQL: %w", name, err)
 		}
 	}
@@ -268,22 +251,11 @@ func ownedSequences(db *sql.DB, schema, table string) ([]string, error) {
 	return out, rows.Err()
 }
 
-func isHex(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, c := range s {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 // provisionPolicyBackendRole connects to the policy's database and provisions its restricted role,
 // logging the outcome. Grants are per database, so the agent's main connection (to "postgres")
 // cannot make them.
-func provisionPolicyBackendRole(cfg DBConfig, proxy *sql.DB, dbName, dbUserName string, policy *GetPolicyDetailsResponse, hostgroupID int) {
+func provisionPolicyBackendRole(cfg DBConfig, proxy proxyUsers, dbName, dbUserName string, policy *GetPolicyDetailsResponse,
+	hostgroupID int, now time.Time, interval time.Duration) {
 	if policy == nil {
 		return
 	}
@@ -300,7 +272,7 @@ func provisionPolicyBackendRole(cfg DBConfig, proxy *sql.DB, dbName, dbUserName 
 		return
 	}
 	defer target.Close()
-	name, err := ProvisionBackendRole(target, proxy, dbName, dbUserName, d.Privilege, d.Tables, hostgroupID)
+	name, err := ProvisionBackendRole(target, proxy, cfg.Host, dbName, dbUserName, d.Privilege, d.Tables, hostgroupID, now, interval)
 	if err != nil {
 		log.Printf("Backend role for %s on %s %v not provisioned: %v; sessions fall back to %s "+
 			"(the agent's database account needs CREATEROLE and the right to grant on the tables)",
