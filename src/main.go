@@ -147,6 +147,10 @@ func startAgent(exit chan struct{}) {
 			Password:   password,
 			Port:       db.Port,
 			DBType:     db.Type,
+
+			ProxysqlAdminUser:     config.ProxysqlAdminUser,
+			ProxysqlAdminPassword: config.ProxysqlAdminPassword,
+			ProxysqlAdminAddr:     config.ProxysqlAdminAddr,
 		}
 
 		conn, err = pkg.ConnectToDB(cfg)
