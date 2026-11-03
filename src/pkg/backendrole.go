@@ -166,6 +166,10 @@ func ProvisionBackendRole(target *sql.DB, proxy proxyUsers, host, database, sour
 		}
 	}
 
+	// Also a managed role: pg_hba.conf admits the managed group from the proxy only (directaccess.go).
+	if err := ensureManagedGroup(target, name); err != nil {
+		return "", err
+	}
 	stmts := []string{
 		fmt.Sprintf("GRANT %s TO %s", qg, q),
 		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", pq.QuoteIdentifier(database), q),

@@ -316,6 +316,10 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		log.Printf("Error while preparing managed role %q: %v", dbUserName, err)
 		return false, err
 	}
+	// In the managed group, so pg_hba.conf can admit it from the proxy only (directaccess.go).
+	if err := ensureManagedGroup(db, dbUserName); err != nil {
+		log.Printf("Managed role %q is not in %s: %v", dbUserName, ManagedGroup, err)
+	}
 
 	// The restricted role for this policy (READ and/or WRITE): the database itself refuses what the
 	// policy did not grant. See backendrole.go. Not fatal: without it ProxySQL uses the policy's own
