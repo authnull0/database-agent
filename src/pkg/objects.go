@@ -15,6 +15,10 @@ type DBConfig struct {
 	Key          string `mapstructure:"KEY"`           // Authentication key
 	MachineKey   string `mapstructure:"MACHINE_KEY"`   // Machine identifier
 	AgentVMIP    string `mapstructure:"AGENT_VM_IP"`   // Agent VM IP address (for multi-host mode)
+
+	// The DB install's credential, from the console's db.env (apiauth.go). The secret is never printed.
+	ProxyClientID     string `mapstructure:"PROXY_CLIENT_ID"`
+	ProxyClientSecret string `mapstructure:"PROXY_CLIENT_SECRET"`
 }
 
 // InstanceCreatedResponse contains the response from the register agent API

@@ -21,16 +21,17 @@ func mask(s string) string {
 
 // String is what %v, %+v and %s print.
 func (c DBConfig) String() string {
-	return fmt.Sprintf("{OrgID:%s TenantID:%s DBType:%s Port:%s TimeInterval:%s API:%s Host:%s User:%s Password:%s Key:%s MachineKey:%s AgentVMIP:%s}",
+	return fmt.Sprintf("{OrgID:%s TenantID:%s DBType:%s Port:%s TimeInterval:%s API:%s Host:%s User:%s Password:%s Key:%s MachineKey:%s AgentVMIP:%s ProxyClientID:%s ProxyClientSecret:%s}",
 		c.OrgID, c.TenantID, c.DBType, c.Port, c.TimeInterval, c.API, c.Host, c.User,
-		mask(c.Password), mask(c.Key), mask(c.MachineKey), c.AgentVMIP)
+		mask(c.Password), mask(c.Key), mask(c.MachineKey), c.AgentVMIP, c.ProxyClientID, mask(c.ProxyClientSecret))
 }
 
 // GoString is what %#v prints.
 func (c DBConfig) GoString() string { return "pkg.DBConfig" + c.String() }
 
 // secretFields are the payload keys that carry credentials: the tenant key travels as "uuid".
-var secretFields = map[string]bool{"uuid": true, "key": true, "machineKey": true, "password": true, "token": true}
+var secretFields = map[string]bool{"uuid": true, "key": true, "machineKey": true, "password": true, "token": true,
+	"accessToken": true, "clientSecret": true}
 
 // payloadForLog is a copy of an API payload with its secrets replaced, for logging only.
 func payloadForLog(p map[string]interface{}) map[string]interface{} {

@@ -29,6 +29,18 @@ Command to run agent
 
 
 
+## Identity
+
+The agent authenticates to the control plane with its install's credential:
+`PROXY_CLIENT_ID` and `PROXY_CLIENT_SECRET` in `db.env`, written by the console when it builds the
+file. The agent exchanges them for a short-lived token at
+`/api/v1/databaseService/proxy/token`, sends it on every call, and exchanges again before it
+expires or after a 401. The secret and the token are never logged.
+
+An agent without them still calls, with no credential, while the control plane's
+`DB_AGENT_ALLOW_UNAUTHENTICATED` is on, which is the default during the move. Download a fresh
+`db.env` for each install before that switch is turned off.
+
 ## Managed role passwords
 
 ProxySQL is the only holder of a managed role's password: users log in with a console token, and

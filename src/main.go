@@ -103,6 +103,8 @@ func startAgent(exit chan struct{}) {
 	}
 
 	log.Printf("Configuration loaded: %v", config)
+	// The install's credential, for every call to the control plane (pkg/apiauth.go).
+	pkg.SetInstallCredential(config.API, config.ProxyClientID, config.ProxyClientSecret)
 
 	timeInterval, err = strconv.Atoi(config.TimeInterval)
 	if err != nil {

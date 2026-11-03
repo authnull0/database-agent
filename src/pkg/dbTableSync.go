@@ -118,7 +118,7 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	res, err := client.Do(httpReq)
+	res, err := doAPI(client, httpReq)
 	if err != nil {
 		return err
 	}
