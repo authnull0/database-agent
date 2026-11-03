@@ -9,11 +9,9 @@ import (
 // InitializeProxySQL runs one-time setup queries when the agent starts
 // For legacy single-host mode, it registers the default host
 func ConnectToProxysqlDB(config DBConfig) (*sql.DB, error) {
-	// Very simple, direct MySQL connection to ProxySQL
-	dsn := "admin,test:admin@tcp(127.0.0.1:6032)/"
-
-	// Explicitly use "mysql" driver for ProxySQL
-	db, err := sql.Open("mysql", dsn)
+	// The admin login comes from db.env (proxyadmin.go), never the source.
+	warnDefaultAdmin(config)
+	db, err := sql.Open("mysql", proxysqlAdminDSN(config))
 	if err != nil {
 		return nil, fmt.Errorf("error opening MySQL connection: %v", err)
 	}
@@ -264,53 +262,4 @@ func ListProxySQLServers(config DBConfig) ([]map[string]interface{}, error) {
 	}
 
 	return servers, nil
-}
-
-func ConfigureProxySQL(db Databases, password string, hostgroup int) error {
-	admin, err := sql.Open(
-		"mysql",
-		"admin:admin@tcp(127.0.0.1:6032)/",
-	)
-	if err != nil {
-		return err
-	}
-	defer admin.Close()
-
-	// Insert server
-	_, _ = admin.Exec(`
-		INSERT IGNORE INTO pgsql_servers
-		(hostgroup_id, hostname, port)
-		VALUES (?, ?, ?)`,
-		hostgroup, db.Host, db.Port,
-	)
-
-	// Insert user
-	_, _ = admin.Exec(`
-		INSERT INTO pgsql_users
-		(username, password, active, default_hostgroup,
-		 transaction_persistent, backend, frontend)
-		VALUES (?, ?, 1, ?, 1, 1, 1)
-		ON DUPLICATE KEY UPDATE
-		  password = VALUES(password),
-		  default_hostgroup = VALUES(default_hostgroup),
-		  active = 1`,
-		db.Username, password, hostgroup,
-	)
-
-	// Apply changes
-	queries := []string{
-		"LOAD PGSQL SERVERS TO RUNTIME",
-		"SAVE PGSQL SERVERS TO DISK",
-		"LOAD PGSQL USERS TO RUNTIME",
-		"SAVE PGSQL USERS TO DISK",
-	}
-
-	for _, q := range queries {
-		if _, err := admin.Exec(q); err != nil {
-			return err
-		}
-	}
-
-	log.Printf("ProxySQL configured for %s (HG=%d)", db.Host, hostgroup)
-	return nil
 }

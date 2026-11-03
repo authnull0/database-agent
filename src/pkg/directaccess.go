@@ -474,6 +474,8 @@ func CheckDirectAccessForHost(pg *sql.DB, config DBConfig, databases []string) *
 	}
 	defer proxyDB.Close()
 	rep := CheckDirectAccess(pg, adminProxyUsers{proxyDB}, config, databases, time.Now())
+	// Whoever can read ProxySQL's admin interface has every managed role's password.
+	rep = withAdminExposure(rep, adminExposure(readAdminIfaces(proxyDB), usingDefaultAdminPassword(config)))
 	switch rep.Status {
 	case DirectAccessProtected:
 		log.Printf("Direct access to %s: %s", config.Host, rep.Detail)
