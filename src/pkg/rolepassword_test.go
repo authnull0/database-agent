@@ -71,18 +71,28 @@ func TestValidateRoleName(t *testing.T) {
 	}
 }
 
-func TestPasswordRotationInterval(t *testing.T) {
-	cases := map[string]time.Duration{"": DefaultPasswordRotation, " ": DefaultPasswordRotation, "1": time.Hour, "168": 168 * time.Hour}
-	for in, want := range cases {
-		got, err := PasswordRotationInterval(in)
-		if err != nil || got != want {
-			t.Errorf("PasswordRotationInterval(%q) = %v, %v; want %v", in, got, err, want)
+// The interval comes from the console (AUTH-233), through the last-active response. Until the
+// first one arrives it is the default; a value outside 1..8760 hours is refused and the
+// interval in use is kept, never turned off.
+func TestRotationIntervalFromTheConsole(t *testing.T) {
+	t.Cleanup(resetRotationIntervalForTest)
+	resetRotationIntervalForTest()
+	if got := RotationInterval(); got != DefaultPasswordRotation {
+		t.Fatalf("before the console says anything: %v, want %v", got, DefaultPasswordRotation)
+	}
+	if err := SetRotationHours(168); err != nil || RotationInterval() != 168*time.Hour {
+		t.Fatalf("168 hours: %v, %v", RotationInterval(), err)
+	}
+	for _, bad := range []int{0, -1, MaxPasswordRotationHours + 1} {
+		if err := SetRotationHours(bad); err == nil {
+			t.Errorf("SetRotationHours(%d) accepted", bad)
+		}
+		if got := RotationInterval(); got != 168*time.Hour {
+			t.Errorf("after refusing %d the interval is %v, want 168h kept", bad, got)
 		}
 	}
-	for _, in := range []string{"0", "-1", "1.5", "24h", "never"} {
-		if _, err := PasswordRotationInterval(in); err == nil {
-			t.Errorf("PasswordRotationInterval(%q): want an error", in)
-		}
+	if err := SetRotationHours(1); err != nil || RotationInterval() != time.Hour {
+		t.Fatalf("1 hour: %v, %v", RotationInterval(), err)
 	}
 }
 

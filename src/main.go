@@ -57,6 +57,13 @@ func loadConfig(path string) (pkg.DBConfig, error) {
 		return pkg.DBConfig{}, err
 	}
 
+	// The rotation interval is set in the AuthNull console now (AUTH-233). Say so, rather than
+	// let an installer believe the value in db.env still does something.
+	if viper.IsSet("PASSWORD_ROTATION_HOURS") {
+		log.Printf("PASSWORD_ROTATION_HOURS in db.env is no longer read: the password rotation " +
+			"interval is set per tenant in the AuthNull console")
+	}
+
 	var config pkg.DBConfig
 	err = viper.Unmarshal(&config)
 	log.Printf("MAIN FUNCTION")
@@ -101,10 +108,6 @@ func startAgent(exit chan struct{}) {
 	if err != nil {
 		log.Default().Println(err)
 	}
-	// Refuse a bad rotation setting at start rather than at the first checkout.
-	if _, err := pkg.PasswordRotationInterval(config.PasswordRotationHours); err != nil {
-		log.Fatalf("Invalid configuration: %v", err)
-	}
 	dsCfg, err := LoadDataSource()
 	if err != nil {
 		log.Fatalf("Failed to load data-source.yaml: %v", err)
@@ -142,8 +145,6 @@ func startAgent(exit chan struct{}) {
 			Password:   password,
 			Port:       db.Port,
 			DBType:     db.Type,
-
-			PasswordRotationHours: config.PasswordRotationHours,
 		}
 
 		conn, err = pkg.ConnectToDB(cfg)

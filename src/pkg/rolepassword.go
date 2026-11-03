@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lib/pq"
@@ -28,8 +29,44 @@ const rolePasswordLength = 32
 // connection string or a shell, so a mistake elsewhere can't turn the password into syntax.
 const passwordCharset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-// DefaultPasswordRotation is how long a managed role keeps its password when db.env doesn't say.
+// DefaultPasswordRotation is how long a managed role keeps its password until the console's
+// interval arrives, and the console's own default.
 const DefaultPasswordRotation = 24 * time.Hour
+
+// MaxPasswordRotationHours is the longest interval the console offers: a year.
+const MaxPasswordRotationHours = 8760
+
+// The rotation interval is the tenant's choice in the AuthNull console (AUTH-233). It arrives in
+// the response to every last-active report (LastActive) and is held here, for checkout and the
+// scheduled sweep. It used to be PASSWORD_ROTATION_HOURS in db.env, which is no longer read.
+var rotationInterval = struct {
+	sync.Mutex
+	d time.Duration
+}{d: DefaultPasswordRotation}
+
+// RotationInterval is the interval in use.
+func RotationInterval() time.Duration {
+	rotationInterval.Lock()
+	defer rotationInterval.Unlock()
+	return rotationInterval.d
+}
+
+// SetRotationHours takes the console's interval. A value outside 1..MaxPasswordRotationHours is
+// refused and the interval in use is kept: rotation is never turned off by a bad value.
+func SetRotationHours(hours int) error {
+	if hours < 1 || hours > MaxPasswordRotationHours {
+		return fmt.Errorf("password rotation interval of %d hours is outside 1..%d", hours, MaxPasswordRotationHours)
+	}
+	d := time.Duration(hours) * time.Hour
+	rotationInterval.Lock()
+	prev := rotationInterval.d
+	rotationInterval.d = d
+	rotationInterval.Unlock()
+	if prev != d {
+		log.Printf("Password rotation interval is now %d hours (set in the AuthNull console)", hours)
+	}
+	return nil
+}
 
 // rotationCommentPrefix marks a pgsql_users row the agent manages. The comment carries the host
 // the role lives on and when its password was last set: "authnull:host=<host>;rotated=<unix>".
@@ -68,20 +105,6 @@ func ValidateRoleName(role string) error {
 		return errors.New("role name contains a comma, which ProxySQL treats as the token separator")
 	}
 	return nil
-}
-
-// PasswordRotationInterval reads PASSWORD_ROTATION_HOURS. Empty means the default; anything that
-// isn't a whole number of hours, at least 1, is refused rather than silently turned off.
-func PasswordRotationInterval(hours string) (time.Duration, error) {
-	hours = strings.TrimSpace(hours)
-	if hours == "" {
-		return DefaultPasswordRotation, nil
-	}
-	n, err := strconv.Atoi(hours)
-	if err != nil || n < 1 {
-		return 0, fmt.Errorf("PASSWORD_ROTATION_HOURS=%q: want a whole number of hours, 1 or more", hours)
-	}
-	return time.Duration(n) * time.Hour, nil
 }
 
 // rotationComment is the pgsql_users comment for a role on host whose password was set at t.
@@ -376,10 +399,7 @@ func RotateDuePasswords(pg *sql.DB, proxy proxyUsers, host string, now time.Time
 
 // RotateDuePasswordsForHost is RotateDuePasswords with the agent's own ProxySQL connection.
 func RotateDuePasswordsForHost(pg *sql.DB, config DBConfig, now time.Time) error {
-	interval, err := PasswordRotationInterval(config.PasswordRotationHours)
-	if err != nil {
-		return err
-	}
+	interval := RotationInterval()
 	proxyDB, err := ConnectToProxysqlDB(config)
 	if err != nil {
 		return err

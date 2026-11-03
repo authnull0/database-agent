@@ -297,10 +297,7 @@ func GenerateCredentials(db *sql.DB, Config DBConfig, dbName string, dbUserName 
 		return false, errors.New("no privileges found in policy details")
 	}
 
-	interval, err := PasswordRotationInterval(Config.PasswordRotationHours)
-	if err != nil {
-		return false, err
-	}
+	interval := RotationInterval()
 	proxySQLDB, err := ConnectToProxysqlDB(Config)
 	if err != nil {
 		log.Printf("Error while connecting to ProxySQL database: %v", err)
