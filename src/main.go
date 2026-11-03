@@ -193,6 +193,10 @@ func startAgent(exit chan struct{}) {
 				if err := pkg.RotateDuePasswordsForHost(h.Conn, h.Cfg, time.Now()); err != nil {
 					log.Printf("Password rotation failed for %s: %v", h.Cfg.Host, err)
 				}
+				// Passwords the backend holds in its vault, for roles it manages there.
+				if err := pkg.ProcessVaultJobsForHost(h.Conn, h.Cfg, time.Now()); err != nil {
+					log.Printf("Vault password jobs failed for %s: %v", h.Cfg.Host, err)
+				}
 			}
 			log.Default().Println("DB Synchronization Completed.")
 		case <-exit:

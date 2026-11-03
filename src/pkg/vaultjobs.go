@@ -1,0 +1,223 @@
+package pkg
+
+import (
+	"bytes"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// Role passwords held in the vault (authnull-service docs/DB-PASSWORD-VAULT.md).
+//
+// The backend generates a managed role's password and keeps it in its vault; this agent applies it.
+// On every sync it claims the jobs for its database server, fetches each password, sets it on the
+// database and then in ProxySQL, and reports. Only an agent with its install's credential asks:
+// the backend gives passwords to nothing else.
+//
+// A role applied this way is marked in pgsql_users ("authnull:vault;host=…;rotated=…"), and the
+// agent's own rotation (S4) leaves it alone from then on: the sweep skips it, and checkout returns
+// its password without rotating. The vault's password is the one the backend can reveal.
+
+// vaultComment marks a pgsql_users row whose password the vault holds.
+func vaultComment(host string, t time.Time) string {
+	return fmt.Sprintf("%svault;host=%s;rotated=%d", rotationCommentPrefix, host, t.Unix())
+}
+
+// isVaultManaged reports a row marked by vaultComment.
+func isVaultManaged(comment string) bool {
+	if !strings.HasPrefix(comment, rotationCommentPrefix) {
+		return false
+	}
+	for _, field := range strings.Split(strings.TrimPrefix(comment, rotationCommentPrefix), ";") {
+		if field == "vault" {
+			return true
+		}
+	}
+	return false
+}
+
+// hostgroups finds the ProxySQL hostgroup a database server is in, for a role that has no
+// pgsql_users row yet (a customer's own role, taken over).
+type hostgroups interface {
+	HostgroupFor(host string) (int, bool, error)
+}
+
+// HostgroupFor reads pgsql_servers through the admin interface.
+func (a adminProxyUsers) HostgroupFor(host string) (int, bool, error) {
+	lit, err := sqliteLiteral(host)
+	if err != nil {
+		return 0, false, err
+	}
+	var hg int
+	err = a.db.QueryRow("SELECT hostgroup_id FROM pgsql_servers WHERE hostname = " + lit + " ORDER BY hostgroup_id LIMIT 1").Scan(&hg)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return hg, true, nil
+}
+
+type vaultJob struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Host   string `json:"host"`
+	Port   int    `json:"port"`
+	DBType string `json:"dbType"`
+	Role   string `json:"role"`
+}
+
+func credentialConfigured() bool {
+	installToken.Lock()
+	defer installToken.Unlock()
+	return installToken.clientID != ""
+}
+
+// postJSON sends one call to the control plane with the install's token and decodes the answer.
+func postJSON(api, path string, in, out any) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", api+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := doAPI(&http.Client{Timeout: 30 * time.Second}, req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s: %s", path, resp.Status)
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// ProcessVaultJobs claims and applies this database server's password jobs, returning how many it
+// applied. A job that fails is reported as failed; the backend keeps the current password.
+func ProcessVaultJobs(pg *sql.DB, proxy proxyUsers, hg hostgroups, config DBConfig, now time.Time) (int, error) {
+	if !credentialConfigured() {
+		return 0, nil
+	}
+	if t := strings.ToLower(config.DBType); t != "" && t != "postgres" && t != "postgresql" {
+		return 0, nil // Postgres first, as S4
+	}
+	api := strings.TrimRight(config.API, "/")
+	host := config.Host
+	if config.Port != "" {
+		host += ":" + config.Port
+	}
+	var claimed struct {
+		Jobs []vaultJob `json:"jobs"`
+	}
+	if err := postJSON(api, "/api/v1/databaseService/agent/jobs/claim", map[string]any{"hosts": []string{host}}, &claimed); err != nil {
+		return 0, fmt.Errorf("claiming password jobs: %w", err)
+	}
+	applied := 0
+	for _, j := range claimed.Jobs {
+		ok, warn, err := runVaultJob(api, pg, proxy, hg, config, j, now)
+		result := map[string]any{"jobId": j.ID, "ok": ok}
+		switch {
+		case err != nil:
+			result["error"] = err.Error()
+			log.Printf("Password job %s for role %q failed: %v", j.ID, j.Role, err)
+		case warn != "":
+			result["error"] = warn
+			log.Printf("Password job %s for role %q: %s", j.ID, j.Role, warn)
+		default:
+			log.Printf("Set the vault's password for role %q on %s", j.Role, config.Host)
+		}
+		if ok {
+			applied++
+		}
+		if err := postJSON(api, "/api/v1/databaseService/agent/jobs/result", result, nil); err != nil {
+			log.Printf("Reporting password job %s: %v", j.ID, err)
+		}
+	}
+	return applied, nil
+}
+
+// runVaultJob applies one job: the database first, then ProxySQL, so a failure can't leave
+// ProxySQL with a password the database doesn't have. If the database changed but ProxySQL could
+// not be written even on a retry, the job is still reported done with a warning: the database now
+// has the vault's password, and the vault must keep it -- the next rotation repairs ProxySQL.
+func runVaultJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, config DBConfig, j vaultJob, now time.Time) (ok bool, warn string, err error) {
+	if j.Kind != "rotate_password" {
+		return false, "", fmt.Errorf("unknown job kind %q", j.Kind)
+	}
+	if j.Host != config.Host {
+		return false, "", fmt.Errorf("host %s is not served by this agent (%s)", j.Host, config.Host)
+	}
+	if err := ValidateRoleName(j.Role); err != nil {
+		return false, "", err
+	}
+	exists, err := pgRoleExists(pg, j.Role)
+	if err != nil {
+		return false, "", fmt.Errorf("checking role: %w", err)
+	}
+	if !exists {
+		return false, "", fmt.Errorf("role %q does not exist on %s", j.Role, config.Host)
+	}
+	existing, found, err := proxy.Get(j.Role)
+	if err != nil {
+		return false, "", fmt.Errorf("reading ProxySQL user: %w", err)
+	}
+	hostgroup := existing.DefaultHostgroup
+	if !found {
+		g, ok, err := hg.HostgroupFor(config.Host)
+		if err != nil {
+			return false, "", fmt.Errorf("finding the ProxySQL hostgroup: %w", err)
+		}
+		if !ok {
+			return false, "", fmt.Errorf("no ProxySQL hostgroup holds %s", config.Host)
+		}
+		hostgroup = g
+	}
+
+	var secret struct {
+		Password string `json:"password"`
+	}
+	if err := postJSON(api, "/api/v1/databaseService/agent/jobs/secret", map[string]string{"jobId": j.ID}, &secret); err != nil {
+		return false, "", fmt.Errorf("fetching the password: %w", err)
+	}
+	if secret.Password == "" {
+		return false, "", errors.New("the control plane sent no password")
+	}
+
+	if _, err := pg.Exec(pgSetPasswordStatement(j.Role, secret.Password, false)); err != nil {
+		return false, "", fmt.Errorf("setting the role's password: %v", strings.ReplaceAll(err.Error(), secret.Password, "[redacted]"))
+	}
+	row := proxyUser{Username: j.Role, Password: secret.Password, DefaultHostgroup: hostgroup, Comment: vaultComment(config.Host, now)}
+	if err := proxy.Put(row); err != nil {
+		if err2 := proxy.Put(row); err2 != nil {
+			return true, "the database has the new password, but ProxySQL could not be updated: " + err2.Error(), nil
+		}
+	}
+	return true, "", nil
+}
+
+// ProcessVaultJobsForHost is ProcessVaultJobs with the agent's own ProxySQL connection.
+func ProcessVaultJobsForHost(pg *sql.DB, config DBConfig, now time.Time) error {
+	if !credentialConfigured() {
+		return nil
+	}
+	proxyDB, err := ConnectToProxysqlDB(config)
+	if err != nil {
+		return err
+	}
+	defer proxyDB.Close()
+	admin := adminProxyUsers{proxyDB}
+	_, err = ProcessVaultJobs(pg, admin, admin, config, now)
+	return err
+}
