@@ -41,6 +41,29 @@ An agent without them still calls, with no credential, while the control plane's
 `DB_AGENT_ALLOW_UNAUTHENTICATED` is on, which is the default during the move. Download a fresh
 `db.env` for each install before that switch is turned off.
 
+## ProxySQL's admin interface
+
+ProxySQL holds every managed role's password in clear in `pgsql_users`, because it logs in to the
+database with them. Whoever can read its admin interface has them all, and can then log in to the
+database directly. The agent's login to it comes from `db.env`:
+
+| Setting | Default |
+|---|---|
+| `PROXYSQL_ADMIN_USER` | `admin` |
+| `PROXYSQL_ADMIN_PASSWORD` | `admin` |
+| `PROXYSQL_ADMIN_ADDR` | `127.0.0.1:6032` |
+
+The agent logs in as `<user>,agent`, because the AuthNull ProxySQL build splits every login at its
+first comma. On every sync it reports the admin interface as **direct access** (exposed) when:
+- it listens on anything but loopback (`admin-mysql_ifaces` / `admin-pgsql_ifaces`), or
+- it still has the default password.
+
+To lock it down:
+- set `admin-mysql_ifaces` and `admin-pgsql_ifaces` to `127.0.0.1:…`;
+- give `admin-admin_credentials` a generated password, and put the same password in
+  `PROXYSQL_ADMIN_PASSWORD`;
+- make `db.env` and `/var/lib/proxysql/proxysql.db` mode 600.
+
 ## Managed role passwords
 
 ProxySQL is the only holder of a managed role's password: users log in with a console token, and

@@ -21,9 +21,10 @@ func mask(s string) string {
 
 // String is what %v, %+v and %s print.
 func (c DBConfig) String() string {
-	return fmt.Sprintf("{OrgID:%s TenantID:%s DBType:%s Port:%s TimeInterval:%s API:%s Host:%s User:%s Password:%s Key:%s MachineKey:%s AgentVMIP:%s ProxyClientID:%s ProxyClientSecret:%s}",
+	return fmt.Sprintf("{OrgID:%s TenantID:%s DBType:%s Port:%s TimeInterval:%s API:%s Host:%s User:%s Password:%s Key:%s MachineKey:%s AgentVMIP:%s ProxyClientID:%s ProxyClientSecret:%s ProxysqlAdminUser:%s ProxysqlAdminPassword:%s ProxysqlAdminAddr:%s}",
 		c.OrgID, c.TenantID, c.DBType, c.Port, c.TimeInterval, c.API, c.Host, c.User,
-		mask(c.Password), mask(c.Key), mask(c.MachineKey), c.AgentVMIP, c.ProxyClientID, mask(c.ProxyClientSecret))
+		mask(c.Password), mask(c.Key), mask(c.MachineKey), c.AgentVMIP, c.ProxyClientID, mask(c.ProxyClientSecret),
+		c.ProxysqlAdminUser, mask(c.ProxysqlAdminPassword), c.ProxysqlAdminAddr)
 }
 
 // GoString is what %#v prints.

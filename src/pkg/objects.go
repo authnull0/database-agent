@@ -19,6 +19,11 @@ type DBConfig struct {
 	// The DB install's credential, from the console's db.env (apiauth.go). The secret is never printed.
 	ProxyClientID     string `mapstructure:"PROXY_CLIENT_ID"`
 	ProxyClientSecret string `mapstructure:"PROXY_CLIENT_SECRET"`
+
+	// ProxySQL's admin login (proxyadmin.go). The password is never printed.
+	ProxysqlAdminUser     string `mapstructure:"PROXYSQL_ADMIN_USER"`
+	ProxysqlAdminPassword string `mapstructure:"PROXYSQL_ADMIN_PASSWORD"`
+	ProxysqlAdminAddr     string `mapstructure:"PROXYSQL_ADMIN_ADDR"`
 }
 
 // InstanceCreatedResponse contains the response from the register agent API
