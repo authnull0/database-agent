@@ -205,6 +205,7 @@ type proxyUsers interface {
 	Get(role string) (proxyUser, bool, error)
 	Put(u proxyUser) error
 	List() ([]proxyUser, error)
+	Delete(role string) error
 }
 
 // sqliteLiteral quotes s for ProxySQL's admin interface, which is SQLite: a single quote is
@@ -268,6 +269,24 @@ func (a adminProxyUsers) Put(u proxyUser) error {
 		return err
 	}
 	if _, err := a.db.Exec(q); err != nil {
+		return err
+	}
+	if _, err := a.db.Exec("LOAD PGSQL USERS TO RUNTIME"); err != nil {
+		return fmt.Errorf("loading users to runtime: %w", err)
+	}
+	if _, err := a.db.Exec("SAVE PGSQL USERS TO DISK"); err != nil {
+		return fmt.Errorf("saving users to disk: %w", err)
+	}
+	return nil
+}
+
+// Delete removes role's row, if any.
+func (a adminProxyUsers) Delete(role string) error {
+	r, err := sqliteLiteral(role)
+	if err != nil {
+		return err
+	}
+	if _, err := a.db.Exec("DELETE FROM pgsql_users WHERE username = " + r); err != nil {
 		return err
 	}
 	if _, err := a.db.Exec("LOAD PGSQL USERS TO RUNTIME"); err != nil {

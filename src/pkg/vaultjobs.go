@@ -71,7 +71,12 @@ type vaultJob struct {
 	Port   int    `json:"port"`
 	DBType string `json:"dbType"`
 	Role   string `json:"role"`
+	// Payload: apply_role's rolePayload, drop_role's dropPayload (consolerole.go).
+	Payload json.RawMessage `json:"payload,omitempty"`
 }
+
+// openRoleDatabase connects to one database for a console role's grants; swappable in tests.
+var openRoleDatabase = openDatabase
 
 func credentialConfigured() bool {
 	installToken.Lock()
@@ -153,12 +158,89 @@ func ProcessVaultJobs(pg *sql.DB, proxy proxyUsers, hg hostgroups, config DBConf
 // not be written even on a retry, the job is still reported done with a warning: the database now
 // has the vault's password, and the vault must keep it -- the next rotation repairs ProxySQL.
 func runVaultJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, config DBConfig, j vaultJob, now time.Time) (ok bool, warn string, err error) {
-	if j.Kind != "rotate_password" {
-		return false, "", fmt.Errorf("unknown job kind %q", j.Kind)
-	}
 	if j.Host != config.Host {
 		return false, "", fmt.Errorf("host %s is not served by this agent (%s)", j.Host, config.Host)
 	}
+	switch j.Kind {
+	case "rotate_password":
+		return runRotateJob(api, pg, proxy, hg, config, j, now)
+	case "apply_role":
+		return runApplyRoleJob(api, pg, proxy, hg, config, j, now)
+	case "drop_role":
+		var p dropPayload
+		if err := json.Unmarshal(j.Payload, &p); err != nil {
+			return false, "", fmt.Errorf("drop_role payload: %w", err)
+		}
+		open := func(name string) (*sql.DB, error) { return openRoleDatabase(config, name) }
+		if err := dropConsoleRole(pg, open, proxy, j.Role, p); err != nil {
+			return false, "", err
+		}
+		return true, "", nil
+	}
+	return false, "", fmt.Errorf("unknown job kind %q", j.Kind)
+}
+
+// runApplyRoleJob creates or updates a console role: its password from the job when it is new.
+func runApplyRoleJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, config DBConfig, j vaultJob, now time.Time) (bool, string, error) {
+	var p rolePayload
+	if err := json.Unmarshal(j.Payload, &p); err != nil {
+		return false, "", fmt.Errorf("apply_role payload: %w", err)
+	}
+	if err := checkRolePayload(p); err != nil {
+		return false, "", err
+	}
+	if err := ValidateRoleName(j.Role); err != nil {
+		return false, "", err
+	}
+	hostgroup, err := roleHostgroup(proxy, hg, config, j.Role)
+	if err != nil {
+		return false, "", err
+	}
+	password := ""
+	if p.Create {
+		var secret struct {
+			Password string `json:"password"`
+		}
+		if err := postJSON(api, "/api/v1/databaseService/agent/jobs/secret", map[string]string{"jobId": j.ID}, &secret); err != nil {
+			return false, "", fmt.Errorf("fetching the password: %w", err)
+		}
+		if secret.Password == "" {
+			return false, "", errors.New("the control plane sent no password")
+		}
+		password = secret.Password
+	}
+	open := func(name string) (*sql.DB, error) { return openRoleDatabase(config, name) }
+	warn, err := applyConsoleRole(pg, open, proxy, config.Host, hostgroup, j.Role, p, password, now)
+	if err != nil {
+		if password != "" {
+			err = errors.New(strings.ReplaceAll(err.Error(), password, "[redacted]"))
+		}
+		return false, "", err
+	}
+	return true, warn, nil
+}
+
+// roleHostgroup is the ProxySQL hostgroup a role's row should have: its own, or the server's.
+func roleHostgroup(proxy proxyUsers, hg hostgroups, config DBConfig, role string) (int, error) {
+	existing, found, err := proxy.Get(role)
+	if err != nil {
+		return 0, fmt.Errorf("reading ProxySQL user: %w", err)
+	}
+	if found {
+		return existing.DefaultHostgroup, nil
+	}
+	g, ok, err := hg.HostgroupFor(config.Host)
+	if err != nil {
+		return 0, fmt.Errorf("finding the ProxySQL hostgroup: %w", err)
+	}
+	if !ok {
+		return 0, fmt.Errorf("no ProxySQL hostgroup holds %s", config.Host)
+	}
+	return g, nil
+}
+
+// runRotateJob sets a managed role's password to the vault's.
+func runRotateJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, config DBConfig, j vaultJob, now time.Time) (ok bool, warn string, err error) {
 	if err := ValidateRoleName(j.Role); err != nil {
 		return false, "", err
 	}
