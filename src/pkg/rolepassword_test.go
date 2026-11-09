@@ -221,6 +221,11 @@ func (f *fakeProxy) List() ([]proxyUser, error) {
 	return out, nil
 }
 
+func (f *fakeProxy) Delete(role string) error {
+	delete(f.users, role)
+	return nil
+}
+
 var errFakePut = &fakeError{"fake ProxySQL write failure"}
 
 type fakeError struct{ s string }
