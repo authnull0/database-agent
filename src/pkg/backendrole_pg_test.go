@@ -272,3 +272,27 @@ func TestPostgresBackendRolePasswordRotation(t *testing.T) {
 	}
 	mustFail(t, loginAs(t, admin, base, name), "insert after rotation", "INSERT INTO br_customers (name) VALUES ('x')")
 }
+
+// A policy granting SELECT and INSERT (custom privileges): its restricted role can insert and
+// cannot update or delete -- the database refuses, whatever ProxySQL lets through.
+func TestPostgresBackendRoleVerbs(t *testing.T) {
+	admin, base := agentTestDB(t)
+	dbName := strings.TrimPrefix(base.Path, "/")
+	name, err := provisionNoProxy(admin, dbName, "verbs_role", []string{"SELECT", "INSERT"}, []string{"br_customers"})
+	if err != nil || name == "" {
+		t.Fatalf("provision: %q %v", name, err)
+	}
+	dropRole(t, admin, name)
+	db := loginAs(t, admin, base, name)
+	if _, err := db.Exec("INSERT INTO br_customers (name) VALUES ('verbs')"); err != nil {
+		t.Errorf("INSERT granted: %v", err)
+	}
+	if _, err := db.Exec("SELECT count(*) FROM br_customers"); err != nil {
+		t.Errorf("SELECT granted: %v", err)
+	}
+	for _, q := range []string{"UPDATE br_customers SET name = 'x'", "DELETE FROM br_customers", "TRUNCATE br_customers"} {
+		if _, err := db.Exec(q); err == nil || !strings.Contains(err.Error(), "permission denied") {
+			t.Errorf("%s: %v, want permission denied", q, err)
+		}
+	}
+}

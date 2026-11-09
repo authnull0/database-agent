@@ -39,27 +39,77 @@ import (
 // It cannot log in and holds no privileges; a member's privileges are only its own grants.
 const BackendRolesGroup = "authnull_backend_roles"
 
-// BackendRoleName is the restricted role for a policy's shape, and false when the policy gets
-// none: EXECUTE among its privileges, an unknown privilege, or none at all.
-func BackendRoleName(database, role string, privileges, tables []string) (string, bool) {
-	privSet := map[string]bool{}
+// tableVerbs are the table privileges a restricted role can hold, in grant order.
+var tableVerbs = []string{"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"}
+
+// verbSet reads a policy's privileges as table verbs: READ is SELECT, WRITE is INSERT, UPDATE and
+// DELETE, a verb is itself (custom privileges, AUTH-227). ok is false for EXECUTE or an unknown
+// privilege: no restricted role can hold those.
+func verbSet(privileges []string) (map[string]bool, bool) {
+	out := map[string]bool{}
 	for _, p := range privileges {
-		p = strings.ToUpper(strings.TrimSpace(p))
-		if p != "READ" && p != "WRITE" {
-			return "", false
+		switch u := strings.ToUpper(strings.TrimSpace(p)); u {
+		case "READ":
+			out["SELECT"] = true
+		case "WRITE":
+			out["INSERT"], out["UPDATE"], out["DELETE"] = true, true, true
+		case "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE":
+			out[u] = true
+		default:
+			return nil, false
 		}
-		privSet[p] = true
 	}
-	if len(privSet) == 0 {
+	return out, len(out) > 0
+}
+
+// backendRoleVerbs are the table privileges a restricted role gets for these policy privileges.
+func backendRoleVerbs(privileges []string) []string {
+	set, _ := verbSet(privileges)
+	var out []string
+	for _, v := range tableVerbs {
+		if set[v] {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// BackendRoleName is the restricted role for a policy's shape, and false when the policy gets
+// none: EXECUTE among its privileges, an unknown privilege, or none at all. A verb set that is
+// exactly whole groups (SELECT; INSERT, UPDATE, DELETE) is named by the groups, as before verbs
+// existed ("v1"); any other set is "v2" over the sorted verbs.
+func BackendRoleName(database, role string, privileges, tables []string) (string, bool) {
+	verbs, ok := verbSet(privileges)
+	if !ok {
 		return "", false
 	}
-	privs := make([]string, 0, len(privSet))
-	for p := range privSet {
-		privs = append(privs, p)
+	read := verbs["SELECT"]
+	write := verbs["INSERT"] && verbs["UPDATE"] && verbs["DELETE"]
+	grouped := 0
+	if read {
+		grouped++
 	}
-	sort.Strings(privs)
+	if write {
+		grouped += 3
+	}
+	version := "v2"
+	var privs []string
+	if grouped == len(verbs) {
+		version = "v1"
+		if read {
+			privs = append(privs, "READ")
+		}
+		if write {
+			privs = append(privs, "WRITE")
+		}
+	} else {
+		for v := range verbs {
+			privs = append(privs, v)
+		}
+		sort.Strings(privs)
+	}
 
-	canonical := "v1|" + strings.ToLower(strings.TrimSpace(database)) + "|" + strings.TrimSpace(role) +
+	canonical := version + "|" + strings.ToLower(strings.TrimSpace(database)) + "|" + strings.TrimSpace(role) +
 		"|" + strings.Join(privs, ",") + "|" + strings.Join(canonicalTables(tables), ",")
 	sum := sha256.Sum256([]byte(canonical))
 	return "an_" + hex.EncodeToString(sum[:])[:16], true
@@ -111,12 +161,11 @@ func ProvisionBackendRole(target *sql.DB, proxy proxyUsers, host, database, sour
 	if !ok {
 		return "", nil
 	}
-	read, write := false, false
-	for _, p := range privileges {
-		switch strings.ToUpper(strings.TrimSpace(p)) {
-		case "READ":
-			read = true
-		case "WRITE":
+	verbs := backendRoleVerbs(privileges)
+	// Writing rows into a table with a serial column draws from its sequence.
+	write := false
+	for _, v := range verbs {
+		if v == "INSERT" || v == "UPDATE" {
 			write = true
 		}
 	}
@@ -174,14 +223,7 @@ func ProvisionBackendRole(target *sql.DB, proxy proxyUsers, host, database, sour
 		fmt.Sprintf("GRANT %s TO %s", qg, q),
 		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", pq.QuoteIdentifier(database), q),
 	}
-	var tablePrivs []string
-	if read {
-		tablePrivs = append(tablePrivs, "SELECT")
-	}
-	if write {
-		tablePrivs = append(tablePrivs, "INSERT", "UPDATE", "DELETE")
-	}
-	privList := strings.Join(tablePrivs, ", ")
+	privList := strings.Join(verbs, ", ")
 
 	if len(canonicalTables(tables)) == 0 {
 		// No tables named: the policy covers the database, so its public schema.

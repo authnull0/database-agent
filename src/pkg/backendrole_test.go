@@ -22,6 +22,30 @@ var backendRoleVectors = []struct {
 	{"dbmfa_test", "dbmfa_writer", []string{"READ"}, []string{"customers", "employees", "orders", "priv_scratch"}, "an_8f3a1492e83ffc13"},
 	{"dbmfa_test", "dbmfa_writer", []string{"READ", "WRITE"}, []string{"customers", "employees", "orders", "priv_scratch"}, "an_7722746c2680046f"},
 	{"salesdb", "readonly_app", []string{"READ"}, nil, "an_2f3f12694f5ff113"},
+	// Custom privileges (AUTH-227): whole groups spelled as verbs keep the v1 name; other verb sets
+	// are v2 over the sorted verbs. ProxySQL asserts the same (test/authnull/authnull_backend_role_test.cpp).
+	{"dbmfa_test", "dbmfa_writer", []string{"SELECT"}, []string{"customers", "employees", "orders", "priv_scratch"}, "an_8f3a1492e83ffc13"},
+	{"dbmfa_test", "dbmfa_writer", []string{"SELECT", "INSERT", "UPDATE", "DELETE"}, []string{"customers", "employees", "orders", "priv_scratch"}, "an_7722746c2680046f"},
+	{"dbmfa_test", "dbmfa_writer", []string{"SELECT", "INSERT"}, []string{"customers", "employees", "orders", "priv_scratch"}, "an_f0e09c5084ba5b55"},
+	{"dbmfa_test", "dbmfa_writer", []string{"read", " insert"}, []string{"customers", "employees", "orders", "priv_scratch"}, "an_f0e09c5084ba5b55"},
+	{"salesdb", "readonly_app", []string{"UPDATE", "TRUNCATE", "SELECT"}, nil, "an_937b3d2d6c1ba244"},
+}
+
+// The table privileges a restricted role gets: the policy's verbs, the groups expanded.
+func TestBackendRoleVerbs(t *testing.T) {
+	for _, c := range []struct {
+		in   []string
+		want string
+	}{
+		{[]string{"READ"}, "SELECT"},
+		{[]string{"READ", "WRITE"}, "SELECT, INSERT, UPDATE, DELETE"},
+		{[]string{"select", "INSERT"}, "SELECT, INSERT"},
+		{[]string{"TRUNCATE", "UPDATE"}, "UPDATE, TRUNCATE"},
+	} {
+		if got := strings.Join(backendRoleVerbs(c.in), ", "); got != c.want {
+			t.Errorf("%v: %q, want %q", c.in, got, c.want)
+		}
+	}
 }
 
 func TestBackendRoleNameIsCanonical(t *testing.T) {
