@@ -184,6 +184,9 @@ func startAgent(exit chan struct{}) {
 	stopSessions := make(chan struct{})
 	defer close(stopSessions)
 	go pkg.RunSessionsLoop(sessionTargets, 10*time.Second, stopSessions)
+	// Session recording: ProxySQL's spool of recorded statements, uploaded as each 5-second file
+	// closes (pkg/recordings.go, authnull-service docs/DB-SESSION-RECORDING.md).
+	go pkg.RunRecordingsLoop(sessionTargets, pkg.RecordingDir(), 5*time.Second, stopSessions)
 
 	// Ticker to run the synchronization every minute
 	ticker := time.NewTicker(time.Duration(timeInterval) * time.Minute)
