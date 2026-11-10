@@ -23,7 +23,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"time"
@@ -295,35 +294,4 @@ func ownedSequences(db *sql.DB, schema, table string) ([]string, error) {
 		out = append(out, s)
 	}
 	return out, rows.Err()
-}
-
-// provisionPolicyBackendRole connects to the policy's database and provisions its restricted role,
-// logging the outcome. Grants are per database, so the agent's main connection (to "postgres")
-// cannot make them.
-func provisionPolicyBackendRole(cfg DBConfig, proxy proxyUsers, dbName, dbUserName string, policy *GetPolicyDetailsResponse,
-	hostgroupID int, now time.Time, interval time.Duration) {
-	if policy == nil {
-		return
-	}
-	d := policy.Data.Database
-	if _, ok := BackendRoleName(dbName, dbUserName, d.Privilege, d.Tables); !ok {
-		log.Printf("Backend role: policy for %s on %s grants %v; the session keeps the policy's own role", dbUserName, dbName, d.Privilege)
-		return
-	}
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		cfg.Host, cfg.Port, cfg.User, cfg.Password, dbName)
-	target, err := sql.Open("postgres", dsn)
-	if err != nil {
-		log.Printf("Backend role: cannot open %s: %v; sessions fall back to %s", dbName, err, dbUserName)
-		return
-	}
-	defer target.Close()
-	name, err := ProvisionBackendRole(target, proxy, cfg.Host, dbName, dbUserName, d.Privilege, d.Tables, hostgroupID, now, interval)
-	if err != nil {
-		log.Printf("Backend role for %s on %s %v not provisioned: %v; sessions fall back to %s "+
-			"(the agent's database account needs CREATEROLE and the right to grant on the tables)",
-			dbUserName, dbName, d.Privilege, err, dbUserName)
-		return
-	}
-	log.Printf("Backend role %s provisioned for %s on %s with %v on %d table(s)", name, dbUserName, dbName, d.Privilege, len(d.Tables))
 }

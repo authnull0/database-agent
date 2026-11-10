@@ -159,10 +159,8 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		}
 		log.Println("FetchTables completed")
 
-		err = PollCheckoutJob(db, dbName, config)
-		if err != nil {
-			log.Printf("Failed to poll checkout job: %v", err)
-		}
+		// Policy roles are no longer polled for here: the backend's reconcile sends apply_policy_role /
+		// drop_policy_role jobs through ProcessVaultJobs (authnull-service docs/DB-POLICY-ROLES.md).
 		log.Println("All operations completed for database:", dbName)
 	}
 

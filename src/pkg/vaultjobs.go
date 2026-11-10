@@ -166,6 +166,19 @@ func runVaultJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, config
 		return runRotateJob(api, pg, proxy, hg, config, j, now)
 	case "apply_role":
 		return runApplyRoleJob(api, pg, proxy, hg, config, j, now)
+	case "apply_policy_role":
+		return runApplyPolicyRoleJob(pg, proxy, hg, config, j, now)
+	case "drop_policy_role":
+		var p dropPayload
+		if err := json.Unmarshal(j.Payload, &p); err != nil {
+			return false, "", fmt.Errorf("drop_policy_role payload: %w", err)
+		}
+		open := func(name string) (*sql.DB, error) { return openRoleDatabase(config, name) }
+		state := func() (bool, bool, error) { return policyRoleState(pg, j.Role) }
+		if err := dropOwnRole(pg, open, proxy, j.Role, p, state, "is not an AuthNull restricted role"); err != nil {
+			return false, "", err
+		}
+		return true, "", nil
 	case "drop_role":
 		var p dropPayload
 		if err := json.Unmarshal(j.Payload, &p); err != nil {
@@ -218,6 +231,61 @@ func runApplyRoleJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, co
 		return false, "", err
 	}
 	return true, warn, nil
+}
+
+// policyRolePayload is an apply_policy_role job's: the policy's shape (authnull-service
+// docs/DB-POLICY-ROLES.md).
+type policyRolePayload struct {
+	Database   string   `json:"database"`
+	SourceRole string   `json:"sourceRole"`
+	Privileges []string `json:"privileges"`
+	Tables     []string `json:"tables"`
+}
+
+// runApplyPolicyRoleJob builds a policy's restricted role -- only under the name its shape gives,
+// so a job cannot have the agent grant a policy's privileges to some other role.
+func runApplyPolicyRoleJob(pg *sql.DB, proxy proxyUsers, hg hostgroups, config DBConfig, j vaultJob, now time.Time) (bool, string, error) {
+	var p policyRolePayload
+	if err := json.Unmarshal(j.Payload, &p); err != nil {
+		return false, "", fmt.Errorf("apply_policy_role payload: %w", err)
+	}
+	if !grantableDatabase(p.Database) {
+		return false, "", fmt.Errorf("database %q cannot be granted on", p.Database)
+	}
+	name, ok := BackendRoleName(p.Database, p.SourceRole, p.Privileges, p.Tables)
+	if !ok {
+		return false, "", fmt.Errorf("privileges %v get no restricted role", p.Privileges)
+	}
+	if name != j.Role {
+		return false, "", fmt.Errorf("role %q does not match the policy's shape (%s)", j.Role, name)
+	}
+	hostgroup, err := roleHostgroup(proxy, hg, config, j.Role)
+	if err != nil {
+		return false, "", err
+	}
+	target, err := openRoleDatabase(config, p.Database)
+	if err != nil {
+		return false, "", fmt.Errorf("connecting to %s: %w", p.Database, err)
+	}
+	defer target.Close()
+	if _, err := ProvisionBackendRole(target, proxy, config.Host, p.Database, p.SourceRole, p.Privileges, p.Tables,
+		hostgroup, now, RotationInterval()); err != nil {
+		return false, "", err
+	}
+	return true, "", nil
+}
+
+// policyRoleState: does role exist, and is it one of AuthNull's restricted roles (an_..., in the
+// restricted roles' group)?
+func policyRoleState(server *sql.DB, role string) (exists, ours bool, err error) {
+	if exists, err = pgRoleExists(server, role); err != nil || !exists {
+		return exists, false, err
+	}
+	groups, err := roleGroups(server, role)
+	if err != nil {
+		return true, false, err
+	}
+	return true, strings.HasPrefix(role, "an_") && groups[BackendRolesGroup], nil
 }
 
 // roleHostgroup is the ProxySQL hostgroup a role's row should have: its own, or the server's.
@@ -280,13 +348,19 @@ func runRotateJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, confi
 	if _, err := pg.Exec(pgSetPasswordStatement(j.Role, secret.Password, false)); err != nil {
 		return false, "", fmt.Errorf("setting the role's password: %v", strings.ReplaceAll(err.Error(), secret.Password, "[redacted]"))
 	}
+	// A managed role logs in through the proxy only: pg_hba.conf admits the managed group from it
+	// alone (directaccess.go). Not fatal -- the password is set; the direct-access report says so.
+	var managedWarn string
+	if err := ensureManagedGroup(pg, j.Role); err != nil {
+		managedWarn = fmt.Sprintf("the role is not in %s: %v", ManagedGroup, err)
+	}
 	row := proxyUser{Username: j.Role, Password: secret.Password, DefaultHostgroup: hostgroup, Comment: vaultComment(config.Host, now)}
 	if err := proxy.Put(row); err != nil {
 		if err2 := proxy.Put(row); err2 != nil {
 			return true, "the database has the new password, but ProxySQL could not be updated: " + err2.Error(), nil
 		}
 	}
-	return true, "", nil
+	return true, managedWarn, nil
 }
 
 // ProcessVaultJobsForHost is ProcessVaultJobs with the agent's own ProxySQL connection.

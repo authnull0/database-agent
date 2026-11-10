@@ -2,10 +2,7 @@ module github.com/authnull0/database-agent
 
 go 1.18
 
-require (
-	github.com/google/uuid v1.6.0
-	github.com/spf13/viper v1.19.0
-)
+require github.com/spf13/viper v1.19.0
 
 require (
 	github.com/denisenkom/go-mssqldb v0.12.3

@@ -396,6 +396,13 @@ func futureOwners(q querier, d roleDBGrants) (map[string][]string, []string, err
 // passes to the agent's user (nothing is deleted), its privileges go, the role goes, and so does
 // its ProxySQL row. A role that is already gone is done.
 func dropConsoleRole(server *sql.DB, open dbOpener, proxy proxyUsers, role string, p dropPayload) error {
+	return dropOwnRole(server, open, proxy, role, p, func() (bool, bool, error) { return consoleRoleState(server, role) },
+		"was not created by AuthNull")
+}
+
+// dropOwnRole drops role, which state says exists and is AuthNull's -- or refuses, saying why not.
+func dropOwnRole(server *sql.DB, open dbOpener, proxy proxyUsers, role string, p dropPayload,
+	state func() (exists, ours bool, err error), notOurs string) error {
 	if err := ValidateRoleName(role); err != nil {
 		return err
 	}
@@ -404,12 +411,12 @@ func dropConsoleRole(server *sql.DB, open dbOpener, proxy proxyUsers, role strin
 			return fmt.Errorf("database %q cannot be dropped from", d)
 		}
 	}
-	exists, ours, err := consoleRoleState(server, role)
+	exists, ours, err := state()
 	if err != nil {
 		return fmt.Errorf("looking up role: %w", err)
 	}
 	if exists && !ours {
-		return fmt.Errorf("role %q exists and was not created by AuthNull; refusing to drop it", role)
+		return fmt.Errorf("role %q exists and %s; refusing to drop it", role, notOurs)
 	}
 	if exists {
 		q := pq.QuoteIdentifier(role)
