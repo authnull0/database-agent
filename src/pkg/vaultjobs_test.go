@@ -224,3 +224,27 @@ func TestVaultJobWhenProxySQLFailsAgainstPostgres(t *testing.T) {
 		t.Fatal("the password is in the reported error")
 	}
 }
+
+// A policy naming the account the agent itself logs in as must not have it taken over: the agent
+// would set a password it does not know and lose the database. Refused before anything is asked.
+func TestVaultJobsLeaveTheAgentsOwnLoginAlone(t *testing.T) {
+	t.Cleanup(resetInstallCredentialForTest)
+	fb, srv := newFakeVaultBackend(t)
+	SetInstallCredential(srv.URL, testClientID, testClientSecret)
+	cfg := DBConfig{API: srv.URL, Host: "192.168.122.175", Port: "5432", DBType: "postgres", User: "dbmfa_admin"}
+	fb.password = "NeverUsed0123456789abcdefghijklm"
+	fb.jobs = []map[string]any{
+		{"id": "own", "kind": "rotate_password", "host": "192.168.122.175", "port": 5432, "dbType": "postgres", "role": "dbmfa_admin"},
+	}
+	if _, err := ProcessVaultJobs(nil, newFakeProxy(), fakeHostgroups{}, cfg, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fb.results) != 1 || fb.results[0]["ok"] != false || !strings.Contains(fb.results[0]["error"].(string), "agent logs in as") {
+		t.Fatalf("result: %v", fb.results)
+	}
+	for _, c := range fb.calls {
+		if strings.HasSuffix(c, "/secret") {
+			t.Error("the password was fetched for the agent's own login")
+		}
+	}
+}
