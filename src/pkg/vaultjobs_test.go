@@ -146,6 +146,11 @@ func TestVaultJobAgainstPostgres(t *testing.T) {
 	if canLogin(t, dsn, role, "customers-old-password") {
 		t.Fatal("the old password still works after the takeover")
 	}
+	// Taken over, the role is managed: pg_hba.conf admits it from the proxy only, as the old
+	// policy provisioning did (directaccess.go).
+	if g, _ := roleGroups(db, role); !g[ManagedGroup] {
+		t.Errorf("the role is not in %s after the takeover", ManagedGroup)
+	}
 	// ProxySQL: the new password, the host's hostgroup, the vault mark.
 	u, ok := fp.users[role]
 	if !ok || u.Password != newPassword || u.DefaultHostgroup != 3 || !isVaultManaged(u.Comment) {

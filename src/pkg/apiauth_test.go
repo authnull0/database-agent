@@ -11,8 +11,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -167,8 +165,7 @@ func TestCredentialNeverLogged(t *testing.T) {
 	}
 }
 
-// Two of the agent's real calls, end to end: the last-active report and the policy lookup, which
-// has no configuration of its own.
+// One of the agent's real calls, end to end: the last-active report.
 func TestRealCallSitesCarryTheToken(t *testing.T) {
 	t.Cleanup(resetInstallCredentialForTest)
 	t.Cleanup(resetRotationIntervalForTest)
@@ -178,8 +175,7 @@ func TestRealCallSitesCarryTheToken(t *testing.T) {
 	if err := LastActive("31", nil, "appdb", DBConfig{API: srv.URL, OrgID: "2", TenantID: "1"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	FetchPolicyDetails(srv.URL, 2, 1, uuid.New())
-	for _, p := range []string{"/api/v1/databaseService/updateLastActive", "/api/v1/policyService/getPolicyDetails"} {
+	for _, p := range []string{"/api/v1/databaseService/updateLastActive"} {
 		if got := fb.authOf[p]; len(got) != 1 || !strings.HasPrefix(got[0], "Bearer dpt.2.") {
 			t.Errorf("%s carried %v", p, got)
 		}
