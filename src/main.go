@@ -175,6 +175,16 @@ func startAgent(exit chan struct{}) {
 		log.Fatal("No database connections could be established")
 	}
 
+	// Live sessions: reported every 10 seconds, so a kill from the console lands within seconds
+	// (pkg/sessions.go, authnull-service docs/DB-LIVE-SESSIONS.md).
+	var sessionTargets []pkg.DBConfig
+	for _, h := range dbHandles {
+		sessionTargets = append(sessionTargets, h.Cfg)
+	}
+	stopSessions := make(chan struct{})
+	defer close(stopSessions)
+	go pkg.RunSessionsLoop(sessionTargets, 10*time.Second, stopSessions)
+
 	// Ticker to run the synchronization every minute
 	ticker := time.NewTicker(time.Duration(timeInterval) * time.Minute)
 	defer ticker.Stop()
