@@ -161,6 +161,11 @@ func runVaultJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, config
 	if j.Host != config.Host {
 		return false, "", fmt.Errorf("host %s is not served by this agent (%s)", j.Host, config.Host)
 	}
+	// Never the account the agent itself logs in as: a password set on it here is one the agent
+	// does not have, and it would lose the database. A policy can name it; the job is refused.
+	if own := strings.TrimSpace(config.User); own != "" && j.Role == own {
+		return false, "", fmt.Errorf("role %q is the account this agent logs in as; it is not changed by jobs", j.Role)
+	}
 	switch j.Kind {
 	case "rotate_password":
 		return runRotateJob(api, pg, proxy, hg, config, j, now)
