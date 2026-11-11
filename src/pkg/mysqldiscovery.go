@@ -13,9 +13,13 @@ import (
 // databaseUser is one login as the dbUser payload carries it.
 type databaseUser struct {
 	Username, Host string
-	Privileges     string // the database's privileges, "SELECT, INSERT" or "ALL PRIVILEGES"
-	Role           string // the console's label: Admin or User
-	Level          string // privilegeLevel: admin, elevated or standard
+	// The database's privileges and the union of its tables', sorted: "INSERT, SELECT" or
+	// "ALL PRIVILEGES"
+	Privileges string
+	Role       string // the console's label: Admin or User
+	Level      string // privilegeLevel: admin, elevated or standard
+	// Per table, sorted (tableprivileges.go); empty for ALL PRIVILEGES
+	TablePrivileges []tablePrivilege
 }
 
 // mysqlSystemAccount is an account MySQL creates for itself (mysql.sys, mysql.session, ...).
@@ -60,12 +64,12 @@ func serverUptime(db *sql.DB, config DBConfig) (int, error) {
 	return uptime, err
 }
 
-// databaseUsers lists the logins with their privileges on dbName.
+// databaseUsers lists the logins with their privileges on dbName: the database's and its tables'.
 func databaseUsers(db *sql.DB, config DBConfig, dbName string) ([]databaseUser, error) {
 	if isMySQL(config) {
 		return mysqlDatabaseUsers(db, dbName)
 	}
-	rows, err := db.Query(rolePrivilegesQuery)
+	rows, err := db.Query(rolePrivilegesQuery, dbName)
 	if err != nil {
 		return nil, err
 	}
@@ -82,15 +86,61 @@ func databaseUsers(db *sql.DB, config DBConfig, dbName string) ([]databaseUser, 
 		u.Level = privilegeLevel(attrs)
 		out = append(out, u)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Table privileges can only be read from a connection to dbName. Without one, the logins go
+	// out with their database privileges alone.
+	var tables map[string][]tablePrivilege
+	conn, closeConn, err := pgDatabaseConn(db, config, dbName)
+	if err == nil {
+		tables, err = pgTablePrivileges(conn)
+		closeConn()
+	}
+	if err != nil {
+		log.Printf("Reading table privileges on %s: %v", dbName, err)
+	}
+	for i := range out {
+		u := &out[i]
+		if u.Privileges == "ALL PRIVILEGES" {
+			u.TablePrivileges = []tablePrivilege{}
+			continue
+		}
+		u.TablePrivileges = capTablePrivilegesFor(u.Username, dbName, tables[u.Username])
+		// The union is of every table, the ones past the cap included.
+		u.Privileges = privilegeSummary(splitPrivileges(u.Privileges), tables[u.Username])
+	}
+	return out, nil
 }
 
-// databaseTables lists dbName's tables with their columns: PostgreSQL's schema public, through a
-// connection to that database; MySQL's tables (views aside), through the server connection.
-func databaseTables(db *sql.DB, config DBConfig, dbName string) (map[string][]string, error) {
-	if isMySQL(config) {
-		return mysqlTables(db, dbName)
+// splitPrivileges is a ", "-separated privilege string as a list.
+func splitPrivileges(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
 	}
+	return strings.Split(s, ",")
+}
+
+// pgDatabaseConn is a connection to dbName: db itself when it is connected there, else a new one
+// with the agent's credentials, which done closes.
+func pgDatabaseConn(db *sql.DB, config DBConfig, dbName string) (conn *sql.DB, done func(), err error) {
+	var current string
+	if err := db.QueryRow("SELECT current_database()").Scan(&current); err != nil {
+		return nil, nil, err
+	}
+	if current == dbName {
+		return db, func() {}, nil
+	}
+	specificDb, err := openPGDatabase(config, dbName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return specificDb, func() { specificDb.Close() }, nil
+}
+
+// openPGDatabase opens and pings a connection to dbName with the agent's credentials.
+func openPGDatabase(config DBConfig, dbName string) (*sql.DB, error) {
 	// Create a new connection to the specific database
 	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		config.Host, config.Port, config.User, config.Password, dbName)
@@ -100,14 +150,27 @@ func databaseTables(db *sql.DB, config DBConfig, dbName string) (map[string][]st
 		log.Printf("Error connecting to specific database %s: %v", dbName, err)
 		return nil, err
 	}
-	defer specificDb.Close()
 
 	// Test the connection
-	err = specificDb.Ping()
-	if err != nil {
+	if err := specificDb.Ping(); err != nil {
 		log.Printf("Cannot ping database %s: %v", dbName, err)
+		specificDb.Close()
 		return nil, err
 	}
+	return specificDb, nil
+}
+
+// databaseTables lists dbName's tables with their columns: PostgreSQL's schema public, through a
+// connection to that database; MySQL's tables (views aside), through the server connection.
+func databaseTables(db *sql.DB, config DBConfig, dbName string) (map[string][]string, error) {
+	if isMySQL(config) {
+		return mysqlTables(db, dbName)
+	}
+	specificDb, err := openPGDatabase(config, dbName)
+	if err != nil {
+		return nil, err
+	}
+	defer specificDb.Close()
 
 	log.Printf("Successfully connected to database: %s", dbName)
 	return pgTables(specificDb)
@@ -115,8 +178,7 @@ func databaseTables(db *sql.DB, config DBConfig, dbName string) (map[string][]st
 
 // --- MySQL ---
 
-// mysqlDatabasePrivileges are the privileges a grant on a database can hold, in the order the
-// payload lists them. GRANT OPTION is not among them: it is a flag on a grant, not a privilege.
+// mysqlDatabasePrivileges are the privileges a grant on a database can hold. GRANT OPTION is not among them: it is a flag on a grant, not a privilege.
 var mysqlDatabasePrivileges = []string{
 	"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "REFERENCES", "INDEX", "ALTER",
 	"CREATE TEMPORARY TABLES", "LOCK TABLES", "EXECUTE", "CREATE VIEW", "SHOW VIEW",
@@ -124,8 +186,8 @@ var mysqlDatabasePrivileges = []string{
 }
 
 // mysqlPrivilegeString is the payload's privilege string for what an account holds on a database:
-// the database-level privileges among privs, in mysqlDatabasePrivileges' order, or ALL PRIVILEGES
-// when it holds every one -- as the PostgreSQL path says for a superuser.
+// the database-level privileges among privs, sorted, or ALL PRIVILEGES when it holds every one --
+// as the PostgreSQL path says for a superuser.
 func mysqlPrivilegeString(privs []string) string {
 	held := map[string]bool{}
 	for _, p := range privs {
@@ -140,7 +202,7 @@ func mysqlPrivilegeString(privs []string) string {
 	if len(out) == len(mysqlDatabasePrivileges) {
 		return "ALL PRIVILEGES"
 	}
-	return strings.Join(out, ", ")
+	return strings.Join(sortedUpper(out), ", ")
 }
 
 // mysqlRoleAttributes reads an account's global privileges (on *.*) as the attributes
@@ -192,7 +254,11 @@ func mysqlGrantee(user, host string) string { return "'" + user + "'@'" + host +
 
 // mysqlDatabaseUsers lists the accounts that can log in (not locked, so not MySQL roles either;
 // not the anonymous or system accounts) with what they hold on dbName: their global privileges,
-// and their grants on any database pattern dbName matches (LIKE, as the server matches them).
+// their grants on any database pattern dbName matches (LIKE, as the server matches them), and
+// their grants on single tables of dbName. Global and database grants cover every table, so they
+// are in the privilege string only; TablePrivileges lists the single-table grants, whose
+// privileges the string includes too. An account holding everything is ALL PRIVILEGES with no
+// table list.
 func mysqlDatabaseUsers(db *sql.DB, dbName string) ([]databaseUser, error) {
 	global := map[string][]string{}
 	grantable := map[string]bool{}
@@ -234,6 +300,11 @@ func mysqlDatabaseUsers(db *sql.DB, dbName string) ([]databaseUser, error) {
 		return nil, err
 	}
 
+	onTables, err := mysqlTableGrants(db, dbName)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err = db.Query("SELECT User, Host FROM mysql.user WHERE account_locked = 'N' AND User <> '' ORDER BY User, Host")
 	if err != nil {
 		return nil, fmt.Errorf("reading accounts: %w", err)
@@ -250,12 +321,50 @@ func mysqlDatabaseUsers(db *sql.DB, dbName string) ([]databaseUser, error) {
 		}
 		g := mysqlGrantee(u.Username, u.Host)
 		attrs := mysqlRoleAttributes(global[g], grantable[g])
-		u.Privileges = mysqlPrivilegeString(append(append([]string{}, global[g]...), onDB[g]...))
+		held := append(append([]string{}, global[g]...), onDB[g]...)
+		u.Privileges = mysqlPrivilegeString(held)
+		u.TablePrivileges = []tablePrivilege{}
+		if u.Privileges != "ALL PRIVILEGES" {
+			u.TablePrivileges = capTablePrivilegesFor(u.Username+"@"+u.Host, dbName, onTables[g])
+			u.Privileges = privilegeSummary(splitPrivileges(u.Privileges), onTables[g])
+		}
 		u.Role = roleLabel(attrs)
 		u.Level = privilegeLevel(attrs)
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// mysqlTableGrants is each account's grants on single tables of dbName, by grantee, the tables
+// named "<database>.<table>".
+func mysqlTableGrants(db *sql.DB, dbName string) (map[string][]tablePrivilege, error) {
+	rows, err := db.Query(`SELECT GRANTEE, TABLE_NAME, PRIVILEGE_TYPE FROM information_schema.TABLE_PRIVILEGES
+		WHERE TABLE_SCHEMA = ? ORDER BY GRANTEE, TABLE_NAME`, dbName)
+	if err != nil {
+		return nil, fmt.Errorf("reading table privileges: %w", err)
+	}
+	defer rows.Close()
+	byTable := map[string]map[string][]string{}
+	for rows.Next() {
+		var grantee, table, priv string
+		if err := rows.Scan(&grantee, &table, &priv); err != nil {
+			return nil, err
+		}
+		if byTable[grantee] == nil {
+			byTable[grantee] = map[string][]string{}
+		}
+		byTable[grantee][table] = append(byTable[grantee][table], priv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := map[string][]tablePrivilege{}
+	for grantee, tables := range byTable {
+		for table, privs := range tables {
+			out[grantee] = append(out[grantee], tablePrivilege{Table: dbName + "." + table, Privileges: privs})
+		}
+	}
+	return out, nil
 }
 
 // mysqlTables lists dbName's base tables with their columns in table order.
