@@ -97,8 +97,8 @@ every sync the agent:
 
 It never creates a role this way, and refuses a job for a server it does not serve.
 
-**Requirements:** only an agent with its install's credential takes part (see Identity), and only
-for Postgres for now.
+**Requirements:** only an agent with its install's credential takes part (see Identity). Postgres
+and MySQL targets (see MySQL targets).
 
 **Afterwards:** such a role is marked `authnull:vault;host=…;rotated=…` in `pgsql_users`. The
 agent's own rotation leaves it alone: the sweep skips it, and checkout returns its password
@@ -107,6 +107,55 @@ unchanged.
 **If ProxySQL fails:** when the database took the password but ProxySQL could not be written, even
 on a retry, the job is reported done with a warning, so the vault keeps the password the database
 really has. The next rotation repairs ProxySQL.
+
+## MySQL targets
+
+A target in `data-source.yaml` is MySQL when its `type` is `mysql` (or `mariadb`); `postgres`,
+`postgresql`, `pg` or no type is Postgres. Without a `port` the engine's default is used (3306 /
+5432). One agent can serve both kinds:
+
+```yaml
+databases:
+  - host: 10.0.0.10
+    type: postgres
+    port: 5432
+    username: authnull_agent
+    password: ENC(...)
+  - host: 10.0.0.11
+    type: mysql
+    port: 3306
+    username: authnull_agent
+    password: ENC(...)
+```
+
+The MySQL account the agent logs in as needs:
+
+    CREATE USER 'authnull_agent'@'<agent-ip>' IDENTIFIED BY '...';
+    GRANT CREATE USER, PROCESS, CONNECTION_ADMIN ON *.* TO 'authnull_agent'@'<agent-ip>';
+    GRANT SELECT ON mysql.* TO 'authnull_agent'@'<agent-ip>';
+    -- for each database whose access the console manages:
+    GRANT ALL ON `shop`.* TO 'authnull_agent'@'<agent-ip>' WITH GRANT OPTION;
+
+What differs from Postgres:
+
+- **Sync:** databases from `information_schema.SCHEMATA` (system databases skipped), accounts from
+  `mysql.user` with their global and per-database grants, tables from `information_schema`. An
+  account's privilege level: `SUPER`, `CREATE USER` or any global privilege `WITH GRANT OPTION` is
+  admin, `FILE` too; `CREATE`, `CREATE ROLE`/`ROLE_ADMIN`, `REPLICATION SLAVE` or a global data
+  privilege is elevated; anything else standard. The pg_hba direct-access check does not apply.
+- **ProxySQL:** the server goes to `mysql_servers` and its managed users to `mysql_users`
+  (`LOAD/SAVE MYSQL …`). Their comment records `host:port`, so two servers on one IP stay apart.
+- **Passwords:** `ALTER USER … IDENTIFIED BY` on every host row of the user name.
+- **Console users** are `'name'@'%'` with `ATTRIBUTE '{"authnull":"console"}'`; **policy users**
+  (`an_…`) carry `{"authnull":"policy"}`. The agent changes or drops only an account with its mark
+  and no other host row. Console grants are made exactly the job's (database, table, function and
+  procedure objects; anything else, column grants and `GRANT OPTION` included, is revoked); a
+  database-level grant escapes `_` and `%`, so it names that database only. MySQL has no
+  `VALID UNTIL`: the backend drops an expired console user. A policy's `TRUNCATE` is granted as
+  `DROP`, which MySQL's `TRUNCATE TABLE` requires. A drop locks the account, ends its sessions and
+  drops it.
+- **Live sessions** come from `stats_mysql_processlist` and are ended with ProxySQL's admin
+  `KILL CONNECTION`.
 
 ## Tests
 
@@ -122,3 +171,11 @@ a role with CREATEROLE:
 
 They create and drop roles, and write and remove `pgsql_users` rows, named `authnull_s4_test_*`
 (and `an_…` restricted roles plus a few `br_*` tables for the `Postgres` tests).
+
+The MySQL tests run against a disposable MySQL 8.0 database whose account has the privileges in
+MySQL targets (plus `ROLE_ADMIN` and `SYSTEM_USER` if the server has accounts with them):
+
+    export DBAGENT_TEST_MYSQL_DSN='agent_it:<pw>@tcp(host:3306)/agent_it_db'
+    go test ./src/pkg/ -run MySQL -v
+
+They create and drop users and tables named `agent_it_*` and `an_…`.

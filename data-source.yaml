@@ -9,3 +9,9 @@ databases:
     port: 5432
     username: saf
     password: ENC(U2FsdGVkX18OmU8Mx4w7wjICtEAPYszFIZmmtOwJ0u8=)
+  # A MySQL target: type mysql (or mariadb). Without a port, 3306.
+  - host: 10.0.0.11
+    type: mysql
+    port: 3306
+    username: authnull_agent
+    password: ENC(replace-with-the-encrypted-password)
