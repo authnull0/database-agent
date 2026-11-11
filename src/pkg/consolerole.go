@@ -463,6 +463,9 @@ func dropInDatabase(open dbOpener, role, name string) error {
 
 // openDatabase connects to one database on the configured server, as the agent.
 func openDatabase(cfg DBConfig, database string) (*sql.DB, error) {
+	if isMySQL(cfg) {
+		return sql.Open("mysql", mysqlDSN(cfg, database))
+	}
 	kv := func(v string) string {
 		return "'" + strings.ReplaceAll(strings.ReplaceAll(v, `\`, `\\`), `'`, `\'`) + "'"
 	}

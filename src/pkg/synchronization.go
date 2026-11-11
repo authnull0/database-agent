@@ -6,12 +6,27 @@ import (
 	"log"
 	"strconv"
 
-	_ "github.com/lib/pq" // Import PostgreSQL driver
+	_ "github.com/go-sql-driver/mysql" // MySQL targets
+	_ "github.com/lib/pq"              // Import PostgreSQL driver
 )
 
-// DBConfig holds the database connection configuration
-
+// ConnectToDB connects to the target as the agent: a PostgreSQL target in its default 'postgres'
+// database, a MySQL target in none (discovery reads information_schema).
 func ConnectToDB(config DBConfig) (*sql.DB, error) {
+	if isMySQL(config) {
+		db, err := sql.Open("mysql", mysqlDSN(config, ""))
+		if err != nil {
+			return nil, err
+		}
+		if err := db.Ping(); err != nil {
+			db.Close()
+			log.Printf("Cannot ping database: %v", err)
+			return nil, err
+		}
+		log.Printf("Successfully connected to MySQL server at %s:%d", config.Host, targetPort(config))
+		return db, nil
+	}
+
 	var dsn string
 
 	// PostgreSQL connection string format
