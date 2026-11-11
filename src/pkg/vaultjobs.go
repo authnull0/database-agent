@@ -172,6 +172,11 @@ func runVaultJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, config
 	if own := strings.TrimSpace(config.User); own != "" && j.Role == own {
 		return false, "", fmt.Errorf("role %q is the account this agent logs in as; it is not changed by jobs", j.Role)
 	}
+	// Nor the engine's built-in admin (postgres, root): it is never brought into AuthNull, so a job
+	// naming it comes from a stale or hand-made entry.
+	if builtinAdmin(config, j.Role) {
+		return false, "", fmt.Errorf("role %q is the database's built-in admin; AuthNull does not manage it", j.Role)
+	}
 	switch j.Kind {
 	case "rotate_password":
 		return runRotateJob(api, pg, proxy, hg, config, j, now)
