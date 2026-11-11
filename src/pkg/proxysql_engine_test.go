@@ -132,4 +132,3 @@ func TestHostgroupForIsPerEngine(t *testing.T) {
 		t.Fatalf("statements:\n got %q\nwant %q", got, want)
 	}
 }
-

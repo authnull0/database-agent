@@ -121,8 +121,8 @@ func ProcessVaultJobs(pg *sql.DB, proxy proxyUsers, hg hostgroups, config DBConf
 	if !credentialConfigured() {
 		return 0, nil
 	}
-	if t := strings.ToLower(config.DBType); t != "" && t != "postgres" && t != "postgresql" {
-		return 0, nil // Postgres first, as S4
+	if e := Engine(config.DBType); e != EnginePostgres && e != EngineMySQL {
+		return 0, nil // the engines with job support (mysqlroles.go for MySQL)
 	}
 	api := strings.TrimRight(config.API, "/")
 	host := config.Host
@@ -184,6 +184,14 @@ func runVaultJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, config
 		if err := json.Unmarshal(j.Payload, &p); err != nil {
 			return false, "", fmt.Errorf("drop_policy_role payload: %w", err)
 		}
+		if isMySQL(config) {
+			// DROP USER takes every grant with it, and a MySQL user owns nothing: no per-database step.
+			state := func() (bool, bool, error) { return mysqlPolicyUserState(pg, j.Role) }
+			if err := dropMySQLUser(pg, proxy, j.Role, state, "is not an AuthNull restricted role"); err != nil {
+				return false, "", err
+			}
+			return true, "", nil
+		}
 		open := func(name string) (*sql.DB, error) { return openRoleDatabase(config, name) }
 		state := func() (bool, bool, error) { return policyRoleState(pg, j.Role) }
 		if err := dropOwnRole(pg, open, proxy, j.Role, p, state, "is not an AuthNull restricted role"); err != nil {
@@ -194,6 +202,13 @@ func runVaultJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, config
 		var p dropPayload
 		if err := json.Unmarshal(j.Payload, &p); err != nil {
 			return false, "", fmt.Errorf("drop_role payload: %w", err)
+		}
+		if isMySQL(config) {
+			state := func() (bool, bool, error) { return mysqlUserState(pg, j.Role, mysqlConsoleMark) }
+			if err := dropMySQLUser(pg, proxy, j.Role, state, "was not created by AuthNull"); err != nil {
+				return false, "", err
+			}
+			return true, "", nil
 		}
 		open := func(name string) (*sql.DB, error) { return openRoleDatabase(config, name) }
 		if err := dropConsoleRole(pg, open, proxy, j.Role, p); err != nil {
@@ -210,10 +225,14 @@ func runApplyRoleJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, co
 	if err := json.Unmarshal(j.Payload, &p); err != nil {
 		return false, "", fmt.Errorf("apply_role payload: %w", err)
 	}
-	if err := checkRolePayload(p); err != nil {
+	check, validName := checkRolePayload, ValidateRoleName
+	if isMySQL(config) {
+		check, validName = checkMySQLRolePayload, validateMySQLUserName
+	}
+	if err := check(p); err != nil {
 		return false, "", err
 	}
-	if err := ValidateRoleName(j.Role); err != nil {
+	if err := validName(j.Role); err != nil {
 		return false, "", err
 	}
 	hostgroup, err := roleHostgroup(proxy, hg, config, j.Role)
@@ -233,8 +252,14 @@ func runApplyRoleJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, co
 		}
 		password = secret.Password
 	}
-	open := func(name string) (*sql.DB, error) { return openRoleDatabase(config, name) }
-	warn, err := applyConsoleRole(pg, open, proxy, config.Host, hostgroup, j.Role, p, password, now)
+	var warn string
+	if isMySQL(config) {
+		// MySQL's grants are the server's: no per-database connection.
+		warn, err = applyMySQLConsoleUser(pg, proxy, managedHost(config), hostgroup, j.Role, p, password, now)
+	} else {
+		open := func(name string) (*sql.DB, error) { return openRoleDatabase(config, name) }
+		warn, err = applyConsoleRole(pg, open, proxy, config.Host, hostgroup, j.Role, p, password, now)
+	}
 	if err != nil {
 		if password != "" {
 			err = errors.New(strings.ReplaceAll(err.Error(), password, "[redacted]"))
@@ -260,7 +285,11 @@ func runApplyPolicyRoleJob(pg *sql.DB, proxy proxyUsers, hg hostgroups, config D
 	if err := json.Unmarshal(j.Payload, &p); err != nil {
 		return false, "", fmt.Errorf("apply_policy_role payload: %w", err)
 	}
-	if !grantableDatabase(p.Database) {
+	grantable := grantableDatabase
+	if isMySQL(config) {
+		grantable = mysqlGrantableDatabase
+	}
+	if !grantable(p.Database) {
 		return false, "", fmt.Errorf("database %q cannot be granted on", p.Database)
 	}
 	name, ok := BackendRoleName(p.Database, p.SourceRole, p.Privileges, p.Tables)
@@ -269,6 +298,18 @@ func runApplyPolicyRoleJob(pg *sql.DB, proxy proxyUsers, hg hostgroups, config D
 	}
 	if name != j.Role {
 		return false, "", fmt.Errorf("role %q does not match the policy's shape (%s)", j.Role, name)
+	}
+	if isMySQL(config) {
+		// The source role's hostgroup: the restricted user stands in for it, on the same server.
+		hostgroup, err := policyHostgroup(proxy, hg, config, j.Role, p.SourceRole)
+		if err != nil {
+			return false, "", err
+		}
+		if _, err := provisionMySQLPolicyUser(pg, proxy, managedHost(config), p.Database, p.SourceRole, p.Privileges, p.Tables,
+			hostgroup, now, RotationInterval()); err != nil {
+			return false, "", err
+		}
+		return true, "", nil
 	}
 	hostgroup, err := roleHostgroup(proxy, hg, config, j.Role)
 	if err != nil {
@@ -299,6 +340,21 @@ func policyRoleState(server *sql.DB, role string) (exists, ours bool, err error)
 	return true, strings.HasPrefix(role, "an_") && groups[BackendRolesGroup], nil
 }
 
+// policyHostgroup is a MySQL restricted user's hostgroup: its source role's row's, else its own
+// row's, else the server's.
+func policyHostgroup(proxy proxyUsers, hg hostgroups, config DBConfig, role, sourceRole string) (int, error) {
+	if sourceRole != "" {
+		src, found, err := proxy.Get(sourceRole)
+		if err != nil {
+			return 0, fmt.Errorf("reading ProxySQL user: %w", err)
+		}
+		if found {
+			return src.DefaultHostgroup, nil
+		}
+	}
+	return roleHostgroup(proxy, hg, config, role)
+}
+
 // roleHostgroup is the ProxySQL hostgroup a role's row should have: its own, or the server's.
 func roleHostgroup(proxy proxyUsers, hg hostgroups, config DBConfig, role string) (int, error) {
 	existing, found, err := proxy.Get(role)
@@ -319,11 +375,20 @@ func roleHostgroup(proxy proxyUsers, hg hostgroups, config DBConfig, role string
 }
 
 // runRotateJob sets a managed role's password to the vault's.
+// On a MySQL target the password is set on every host row of the user name (mysqlroles.go).
 func runRotateJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, config DBConfig, j vaultJob, now time.Time) (ok bool, warn string, err error) {
-	if err := ValidateRoleName(j.Role); err != nil {
+	validName, roleExists := ValidateRoleName, pgRoleExists
+	if isMySQL(config) {
+		validName = validateMySQLUserName
+		roleExists = func(db *sql.DB, user string) (bool, error) {
+			hosts, err := mysqlUserHosts(db, user)
+			return len(hosts) > 0, err
+		}
+	}
+	if err := validName(j.Role); err != nil {
 		return false, "", err
 	}
-	exists, err := pgRoleExists(pg, j.Role)
+	exists, err := roleExists(pg, j.Role)
 	if err != nil {
 		return false, "", fmt.Errorf("checking role: %w", err)
 	}
@@ -356,16 +421,22 @@ func runRotateJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, confi
 		return false, "", errors.New("the control plane sent no password")
 	}
 
-	if _, err := pg.Exec(pgSetPasswordStatement(j.Role, secret.Password, false)); err != nil {
-		return false, "", fmt.Errorf("setting the role's password: %v", strings.ReplaceAll(err.Error(), secret.Password, "[redacted]"))
-	}
-	// A managed role logs in through the proxy only: pg_hba.conf admits the managed group from it
-	// alone (directaccess.go). Not fatal -- the password is set; the direct-access report says so.
 	var managedWarn string
-	if err := ensureManagedGroup(pg, j.Role); err != nil {
-		managedWarn = fmt.Sprintf("the role is not in %s: %v", ManagedGroup, err)
+	if isMySQL(config) {
+		if err := mysqlSetPassword(pg, j.Role, secret.Password); err != nil {
+			return false, "", fmt.Errorf("setting the user's password: %v", strings.ReplaceAll(err.Error(), secret.Password, "[redacted]"))
+		}
+	} else {
+		if _, err := pg.Exec(pgSetPasswordStatement(j.Role, secret.Password, false)); err != nil {
+			return false, "", fmt.Errorf("setting the role's password: %v", strings.ReplaceAll(err.Error(), secret.Password, "[redacted]"))
+		}
+		// A managed role logs in through the proxy only: pg_hba.conf admits the managed group from it
+		// alone (directaccess.go). Not fatal -- the password is set; the direct-access report says so.
+		if err := ensureManagedGroup(pg, j.Role); err != nil {
+			managedWarn = fmt.Sprintf("the role is not in %s: %v", ManagedGroup, err)
+		}
 	}
-	row := proxyUser{Username: j.Role, Password: secret.Password, DefaultHostgroup: hostgroup, Comment: vaultComment(config.Host, now)}
+	row := proxyUser{Username: j.Role, Password: secret.Password, DefaultHostgroup: hostgroup, Comment: vaultComment(managedHost(config), now)}
 	if err := proxy.Put(row); err != nil {
 		if err2 := proxy.Put(row); err2 != nil {
 			return true, "the database has the new password, but ProxySQL could not be updated: " + err2.Error(), nil
