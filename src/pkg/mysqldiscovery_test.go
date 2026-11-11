@@ -42,9 +42,9 @@ func TestMySQLPrivilegeLevels(t *testing.T) {
 }
 
 // A database's privileges as the dbUser payload's string: the database-level ones an account holds
-// there, globally or on the database, in a fixed order; all of them read as ALL PRIVILEGES.
+// there, globally or on the database, sorted; all of them read as ALL PRIVILEGES.
 func TestMySQLDatabasePrivilegeString(t *testing.T) {
-	if got := mysqlPrivilegeString([]string{"INSERT", "SELECT", "PROCESS", "USAGE", "SELECT"}); got != "SELECT, INSERT" {
+	if got := mysqlPrivilegeString([]string{"SELECT", "INSERT", "PROCESS", "USAGE", "SELECT"}); got != "INSERT, SELECT" {
 		t.Errorf("got %q", got)
 	}
 	if got := mysqlPrivilegeString(mysqlDatabasePrivileges); got != "ALL PRIVILEGES" {
@@ -107,7 +107,7 @@ func TestMySQLDiscovery(t *testing.T) {
 			t.Errorf("system account listed: %+v", u)
 		}
 	}
-	if u := byName[user+"@%"]; u.Privileges != "SELECT, INSERT" || u.Level != PrivilegeStandard || u.Role != "User" {
+	if u := byName[user+"@%"]; u.Privileges != "INSERT, SELECT" || u.Level != PrivilegeStandard || u.Role != "User" {
 		t.Errorf("%s: %+v", user, u)
 	}
 	// The test's own account: CREATE USER on *.* (admin), ALL on its database.

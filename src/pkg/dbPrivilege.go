@@ -7,15 +7,13 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strconv"
+
+	"github.com/lib/pq"
 )
 
 // FetchTablePrivileges reports each login with its privileges on the database (PostgreSQL roles,
 // MySQL accounts)
 func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId string) error {
-	orgID, _ := strconv.Atoi(config.OrgID)
-	tenantID, _ := strconv.Atoi(config.TenantID)
-
 	// Agent VM IP for agent_vm_ip (AGENT_VM_IP -> private IP; never the public/ipify address)
 	publicIP := AgentIdentity(config)
 
@@ -25,25 +23,11 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 	}
 
 	for _, u := range users {
-		username, host, role, privileges := u.Username, u.Host, u.Role, u.Privileges
-		log.Printf("Database Name: %s, User: %s, Host: %s, Privileges: %s, Role: %s", dbName, username, host, privileges, role)
+		log.Printf("Database Name: %s, User: %s, Host: %s, Privileges: %s, Role: %s, Tables: %d",
+			dbName, u.Username, u.Host, u.Privileges, u.Role, len(u.TablePrivileges))
 
 		// Send the username to the dbUser API
-		userPayload := map[string]interface{}{
-			"orgId":        orgID,
-			"tenantId":     tenantID,
-			"databaseType": config.DBType,
-			"databaseName": dbName,
-			"userName":     username,
-			"host":         host,
-			"role":         role,
-			"privilege":    privileges,
-			// For policies' privilege condition: admin, elevated or standard (privilegelevel.go).
-			"privilegeLevel": u.Level,
-			"instanceId":     instanceId,
-			"agentVmIp":      publicIP,    // Multi-host: Agent VM IP (where ProxySQL runs)
-			"hostVmIp":       config.Host, // Multi-host: Database host VM IP
-		}
+		userPayload := dbUserPayload(config, dbName, instanceId, publicIP, u)
 
 		userPayloadBytes, err := json.Marshal(userPayload)
 		if err != nil {
@@ -83,22 +67,22 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 	return nil
 }
 
-// rolePrivilegesQuery lists the login roles with their database privileges, the console's Admin/User
-// label, and the attributes privilegeLevel reads.
+// rolePrivilegesQuery lists the login roles with their privileges on the database $1 (CONNECT,
+// CREATE and TEMPORARY: each one held, through PUBLIC or a role it inherits from included), the
+// console's Admin/User label, and the attributes privilegeLevel reads. A superuser holds ALL
+// PRIVILEGES. The table privileges are read separately, from a connection to that database
+// (pgTablePrivilegesQuery).
 var rolePrivilegesQuery = `
 	SELECT
 		r.rolname AS username,
 		'%' AS host,  -- PostgreSQL doesn't have host concepts like MySQL, using % for compatibility
 		CASE 
 			WHEN r.rolsuper THEN 'ALL PRIVILEGES'
-			ELSE string_agg(
-				CASE
-					WHEN has_database_privilege(r.rolname, current_database(), 'CREATE') THEN 'CREATE'
-					WHEN has_database_privilege(r.rolname, current_database(), 'CONNECT') THEN 'CONNECT'
-					WHEN has_database_privilege(r.rolname, current_database(), 'TEMPORARY') THEN 'TEMPORARY'
-					ELSE ''
-				END, ', '
-			)
+			ELSE array_to_string(ARRAY(
+				SELECT p FROM unnest(ARRAY['CONNECT', 'CREATE', 'TEMPORARY']) AS p
+				WHERE has_database_privilege(r.oid, $1::text, p)
+				ORDER BY p
+			), ', ')
 		END AS privileges,
 		CASE 
 			WHEN r.rolsuper THEN 'Admin'
@@ -112,8 +96,49 @@ var rolePrivilegesQuery = `
 						  'pg_read_all_stats', 'pg_stat_scan_tables', 'pg_monitor', 
 						  'pg_database_owner')
 		AND r.rolcanlogin = true
-	GROUP BY 
-		r.oid, r.rolname, r.rolsuper, r.rolcreaterole, r.rolcreatedb, r.rolreplication, r.rolbypassrls
 	ORDER BY 
 		r.rolname;
 	`
+
+// pgTablePrivilegesQuery is, in one pass over the connected database, each login role (superusers
+// aside: they hold everything) with each table, view, materialized view or foreign table it holds
+// a privilege on and the privileges it holds there, those it has through a role it inherits from
+// included. The system schemas (pg_catalog, information_schema, TOAST and temporary ones) are left
+// out.
+const pgTablePrivilegesQuery = `
+	SELECT rolname, tbl, privs FROM (
+		SELECT r.rolname, n.nspname || '.' || c.relname AS tbl,
+		       ARRAY(SELECT p FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE',
+		                                        'REFERENCES', 'TRIGGER']) AS p
+		             WHERE has_table_privilege(r.oid, c.oid, p) ORDER BY p) AS privs
+		FROM pg_roles r
+		CROSS JOIN pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE r.rolcanlogin AND NOT r.rolsuper
+		  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+		  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+		  AND n.nspname NOT LIKE 'pg\_toast%'
+		  AND n.nspname NOT LIKE 'pg\_temp\_%'
+	) t
+	WHERE cardinality(privs) > 0
+	ORDER BY rolname, tbl`
+
+// pgTablePrivileges reads pgTablePrivilegesQuery from conn, a connection to the database: each
+// login's tables with their privileges.
+func pgTablePrivileges(conn *sql.DB) (map[string][]tablePrivilege, error) {
+	rows, err := conn.Query(pgTablePrivilegesQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]tablePrivilege{}
+	for rows.Next() {
+		var role string
+		var tp tablePrivilege
+		if err := rows.Scan(&role, &tp.Table, pq.Array(&tp.Privileges)); err != nil {
+			return nil, err
+		}
+		out[role] = append(out[role], tp)
+	}
+	return out, rows.Err()
+}

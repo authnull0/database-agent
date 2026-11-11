@@ -22,7 +22,7 @@ func TestPostgresRolePrivilegeLevels(t *testing.T) {
 		role := r
 		t.Cleanup(func() { admin.Exec("DROP ROLE IF EXISTS " + role) })
 	}
-	rows, err := admin.Query(rolePrivilegesQuery)
+	rows, err := admin.Query(rolePrivilegesQuery, "postgres")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
