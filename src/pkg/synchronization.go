@@ -23,7 +23,7 @@ func ConnectToDB(config DBConfig) (*sql.DB, error) {
 			log.Printf("Cannot ping database: %v", err)
 			return nil, err
 		}
-		log.Printf("Successfully connected to MySQL server at %s:%d", config.Host, targetPort(config))
+		logDebugf("Successfully connected to MySQL server at %s:%d", config.Host, targetPort(config))
 		return db, nil
 	}
 
@@ -46,7 +46,7 @@ func ConnectToDB(config DBConfig) (*sql.DB, error) {
 		return nil, err
 	}
 
-	log.Printf("Successfully connected to PostgreSQL server at %s:%s", config.Host, config.Port)
+	logDebugf("Successfully connected to PostgreSQL server at %s:%s", config.Host, config.Port)
 	return db, nil
 }
 
@@ -75,8 +75,7 @@ var mysqlDirectAccessNote sync.Once
 // FetchDatabaseDetails fetches the database names, statuses, and table privileges
 // skipping system databases
 func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
-	log.Println("Fetching database details...")
-	log.Default().Printf("%v", config)
+	logDebugf("Fetching database details for %v", config)
 
 	databases, err := listDatabases(db, config)
 	if err != nil {
@@ -95,11 +94,11 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 	}
 
 	for _, dbName := range databases {
-		log.Printf("Processing database: %s", dbName)
+		logDebugf("Processing database: %s", dbName)
 
 		// Register the database agent and get its ID
 		instanceId, agentStatus := RegisterAgent(db, dbName, config)
-		log.Printf("Registered agent for database %s with Instance ID: %s and Agent Status: %s", dbName, instanceId, agentStatus)
+		logDebugf("Registered agent for database %s with Instance ID: %s and Agent Status: %s", dbName, instanceId, agentStatus)
 		// If the agent is marked as deleted, skip further processing for this database
 		if agentStatus == "DELETED" {
 			log.Printf("Agent for database %s is deleted, skipping further processing", dbName)
@@ -115,15 +114,16 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		if err != nil {
 			log.Printf("Failed to get last active time of the database %s: %v", dbName, err)
 		}
-		log.Println("Last Active Time call completed")
+		logDebugf("Last Active Time call completed")
 
 		// Fetch database status
 		hostGroupId, databaseStatus, err := FetchDatabaseStatus(db, dbName, config, instanceId)
 		if err != nil {
+			// Without the backend's answer there is no hostgroup to put the server in.
 			log.Printf("Failed to fetch status for database %s: %v", dbName, err)
+			continue
 		}
-		log.Println("FetchDatabaseStatus completed for host group Id:", hostGroupId)
-		log.Println("Database Status from API:", databaseStatus)
+		logDebugf("FetchDatabaseStatus completed for host group Id: %d, status %s", hostGroupId, databaseStatus)
 
 		// If the database is marked as deleted in the API, skip further processing
 		if databaseStatus == "DELETED" {
@@ -138,24 +138,24 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		if err != nil {
 			log.Printf("Failed to update host in ProxySQL for database %s: %v", dbName, err)
 		}
-		log.Println("UpdateHostInProxySQL completed")
+		logDebugf("UpdateHostInProxySQL completed")
 		// Fetch tables and privileges for each database
 		err = FetchTablePrivileges(db, dbName, config, instanceId)
 		if err != nil {
 			log.Printf("Failed to fetch table privileges for database %s: %v", dbName, err)
 		}
-		log.Println("FetchTablePrivileges completed")
+		logDebugf("FetchTablePrivileges completed")
 
 		// Fetch table and column names with the main database connection for querying db_synchronization
 		err = FetchTables(db, dbName, config, instanceId)
 		if err != nil {
 			log.Printf("Failed to fetch tables and columns for %s: %v", dbName, err)
 		}
-		log.Println("FetchTables completed")
+		logDebugf("FetchTables completed")
 
 		// Policy roles are no longer polled for here: the backend's reconcile sends apply_policy_role /
 		// drop_policy_role jobs through ProcessVaultJobs (authnull-service docs/DB-POLICY-ROLES.md).
-		log.Println("All operations completed for database:", dbName)
+		logDebugf("All operations completed for database: %s", dbName)
 	}
 
 	return nil

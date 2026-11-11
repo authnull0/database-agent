@@ -20,23 +20,23 @@ import (
 func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) {
 
 	orgID, _ := strconv.Atoi(config.OrgID)
-	log.Printf("Org Id: %d", orgID)
+	logDebugf("Org Id: %d", orgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
-	log.Printf("Tenant Id: %d", tenantID)
+	logDebugf("Tenant Id: %d", tenantID)
 
 	data := InstanceCreatedResponse{}
 
 	instanceName, _ := os.Hostname()
-	log.Default().Println("Register Agent", instanceName)
+	logDebugf("Register Agent %s", instanceName)
 
 	ipAddr := AgentIdentity(config)
-	log.Default().Println("Agent VM IP:", ipAddr)
+	logDebugf("Agent VM IP: %s", ipAddr)
 
 	privateIp, err := utils.GetPrivateIP()
 	if err != nil {
-		log.Default().Println("Failed to get Private IP Address")
+		log.Printf("Failed to get the private IP: %v", err)
 	} else {
-		log.Default().Println("Private IP Address:", privateIp)
+		logDebugf("Private IP Address: %s", privateIp)
 	}
 
 	// Sync database information with the API
@@ -56,21 +56,15 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("Error while marshalling the payload: %v", err)
-
+		return "", ""
 	}
-	log.Default().Println("====================================")
-
-	log.Default().Println("Database Register Agent Payload", payloadForLog(payload))
-
-	log.Default().Println("====================================")
+	logDebugf("Database Register Agent Payload %v", payloadForLog(payload))
 
 	apiURL := config.API + "/api/v1/databaseService/registerDbAgent"
 	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
-	log.Printf("Payload Sent: %s", jsonForLog(payloadBytes))
-
 	if err != nil {
 		log.Printf("Error while creating request: %v", err)
-
+		return "", ""
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -78,15 +72,18 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) 
 	client := &http.Client{}
 	httpResp, err := doAPI(client, httpReq)
 	if err != nil {
-		log.Printf("Error while making request: %v", err)
-
+		log.Printf("Registering the agent for %s on %s: %v", dbName, config.Host, err)
+		return "", ""
 	}
 	defer httpResp.Body.Close()
 
 	body, err := ioutil.ReadAll(httpResp.Body)
 	if err != nil {
 		log.Printf("Error while reading response body: %v", err)
-
+		return "", ""
+	}
+	if httpResp.StatusCode != http.StatusOK {
+		log.Printf("Registering the agent for %s on %s: the control plane answered %d", dbName, config.Host, httpResp.StatusCode)
 	}
 
 	errMarsh := json.Unmarshal([]byte(string(body)), &data)
@@ -96,11 +93,10 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) 
 	}
 
 	// Not the raw body: what an operator needs is the instance and the result.
-	log.Printf("Machine registered: instance %v, code %v", data.InstanceId, data.Code)
+	logDebugf("Machine registered: instance %v, code %v", data.InstanceId, data.Code)
 
 	instanceId := data.InstanceId
 	agentStatus := data.AgentStatus
-	fmt.Println("Instance Id returned from register:", instanceId)
 	// NB: instance ID is the machine_id of epm_machines table.
 	return instanceId, agentStatus
 }
@@ -111,7 +107,7 @@ func RegisterAgent(db *sql.DB, dbName string, config DBConfig) (string, string) 
 // The response carries the tenant's password rotation interval, set in the console (AUTH-233),
 // which the agent then uses. Anything short of a good answer keeps the interval in use.
 func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig, directAccess *DirectAccessReport) error {
-	log.Default().Printf("Instance Id after last active api call: %v", instanceId)
+	logDebugf("Instance Id after last active api call: %v", instanceId)
 
 	orgID, _ := strconv.Atoi(config.OrgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
@@ -135,7 +131,7 @@ func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig, d
 	if err != nil {
 		return fmt.Errorf("last active: request: %w", err)
 	}
-	log.Printf("Payload Sent: %s", jsonForLog(payloadBytes))
+	logDebugf("Payload Sent: %s", jsonForLog(payloadBytes))
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	httpResp, err := doAPI(&http.Client{Timeout: 30 * time.Second}, httpReq)
@@ -148,7 +144,7 @@ func LastActive(instanceId string, db *sql.DB, dbName string, config DBConfig, d
 	if err != nil {
 		return fmt.Errorf("last active: read response: %w", err)
 	}
-	log.Default().Printf("Response from external service: %v", jsonForLog(body))
+	logDebugf("Response from external service: %v", jsonForLog(body))
 	if httpResp.StatusCode != http.StatusOK {
 		return fmt.Errorf("last active: status %d", httpResp.StatusCode)
 	}

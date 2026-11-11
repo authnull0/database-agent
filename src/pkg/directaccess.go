@@ -478,7 +478,7 @@ func CheckDirectAccessForHost(pg *sql.DB, config DBConfig, databases []string) *
 	rep = withAdminExposure(rep, adminExposure(readAdminIfaces(proxyDB), usingDefaultAdminPassword(config)))
 	switch rep.Status {
 	case DirectAccessProtected:
-		log.Printf("Direct access to %s: %s", config.Host, rep.Detail)
+		logDebugf("Direct access to %s: %s", config.Host, rep.Detail)
 	default:
 		log.Printf("WARNING direct access to %s is %s:\n%s", config.Host, rep.Status, rep.Detail)
 	}
