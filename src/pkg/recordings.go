@@ -117,10 +117,13 @@ func shipRecordingFile(path string, bucket int64, targets []recordingTarget) err
 		st["line"] = line
 		i := 0
 		if len(targets) > 1 {
+			// ProxySQL numbers each engine's hostgroups separately, so a line is placed by its
+			// engine and hostgroup; a line naming no engine (an older ProxySQL) by hostgroup alone.
 			hg, _ := st["hg"].(float64)
+			engine, _ := st["engine"].(string)
 			i = -1
 			for j, t := range targets {
-				if float64(t.hostgroup) == hg {
+				if float64(t.hostgroup) == hg && (engine == "" || Engine(engine) == Engine(t.cfg.DBType)) {
 					i = j
 					break
 				}

@@ -149,3 +149,31 @@ func TestNoRecordingsShippedWithoutACredential(t *testing.T) {
 		t.Errorf("missing spool: %v", err)
 	}
 }
+
+// ProxySQL numbers MySQL and PostgreSQL hostgroups separately: a MySQL and a PostgreSQL target can
+// both be hostgroup 0, and each line's engine says whose it is. A line naming no engine (an older
+// ProxySQL) goes by hostgroup alone, as before.
+func TestRecordingsSplitByEngineAndHostgroup(t *testing.T) {
+	t.Cleanup(resetInstallCredentialForTest)
+	fb, srv := newFakeRecordingBackend(t)
+	SetInstallCredential(srv.URL, testClientID, testClientSecret)
+	dir := t.TempDir()
+	spoolFile(t, dir, 1794303775,
+		`{"sid":4,"at":1794303776901,"hg":0,"engine":"mysql","stmt":"select 1","allowed":true}`,
+		`{"sid":4,"at":1794303776902,"hg":0,"engine":"postgres","stmt":"select 2;","allowed":true}`,
+		`{"sid":5,"at":1794303776903,"hg":0,"engine":"postgres","stmt":"select 3;","allowed":true}`)
+	targets := []recordingTarget{
+		{cfg: DBConfig{API: srv.URL, Host: "192.168.122.175", Port: "5432", DBType: "postgres"}, hostgroup: 0},
+		{cfg: DBConfig{API: srv.URL, Host: "192.168.122.175", Port: "3306", DBType: "mysql"}, hostgroup: 0},
+	}
+	if err := shipRecordings(dir, time.Unix(1794303800, 0), targets); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, u := range fb.uploads {
+		got[u["host"].(string)] = len(u["statements"].([]any))
+	}
+	if got["192.168.122.175:3306"] != 1 || got["192.168.122.175:5432"] != 2 {
+		t.Errorf("uploads per server: %v", got)
+	}
+}
