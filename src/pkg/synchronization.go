@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"strconv"
+	"sync"
 
 	_ "github.com/go-sql-driver/mysql" // MySQL targets
 	_ "github.com/lib/pq"              // Import PostgreSQL driver
@@ -70,47 +70,29 @@ func isSystemDatabase(dbName, dbType string) bool {
 	return false
 }
 
+var mysqlDirectAccessNote sync.Once
+
 // FetchDatabaseDetails fetches the database names, statuses, and table privileges
 // skipping system databases
 func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 	log.Println("Fetching database details...")
 	log.Default().Printf("%v", config)
 
-	var databases []string
-
-	// PostgreSQL query to list databases
-	databasesQuery := "SELECT datname FROM pg_database WHERE datistemplate = false"
-
-	// Execute query for database names
-	rows, err := db.Query(databasesQuery)
+	databases, err := listDatabases(db, config)
 	if err != nil {
-		log.Printf("Error querying databases: %v", err)
 		return err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var dbName string
-		if err := rows.Scan(&dbName); err != nil {
-			log.Printf("Error scanning database name: %v", err)
-			return err
-		}
-
-		// Skip system databases
-		if isSystemDatabase(dbName, config.DBType) {
-			log.Printf("Skipping system database: %s", dbName)
-			continue
-		}
-
-		databases = append(databases, dbName)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	rows.Close()
 
 	// Can anything but the proxy log in as a managed role? Once per sync: pg_hba.conf is per server.
-	directAccess := CheckDirectAccessForHost(db, config, databases)
+	// pg_hba.conf is PostgreSQL's: a MySQL target has no such check (yet), and reports none.
+	var directAccess *DirectAccessReport
+	if isMySQL(config) {
+		mysqlDirectAccessNote.Do(func() {
+			log.Printf("Direct-access check skipped for MySQL targets: it reads pg_hba.conf and is PostgreSQL-only")
+		})
+	} else {
+		directAccess = CheckDirectAccessForHost(db, config, databases)
+	}
 
 	for _, dbName := range databases {
 		log.Printf("Processing database: %s", dbName)
@@ -150,11 +132,8 @@ func FetchDatabaseDetails(db *sql.DB, config DBConfig) error {
 		}
 
 		// The configured port, not a literal 5432: a database on another port was registered at
-		// the wrong address and never matched.
-		dbPort, convErr := strconv.Atoi(config.Port)
-		if convErr != nil || dbPort == 0 {
-			dbPort = 5432
-		}
+		// the wrong address and never matched. Without one, the engine's default.
+		dbPort := targetPort(config)
 		err = UpdateHostInProxySQL(config, config.Host, hostGroupId, dbPort)
 		if err != nil {
 			log.Printf("Failed to update host in ProxySQL for database %s: %v", dbName, err)

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -19,66 +18,11 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 	tenantID, _ := strconv.Atoi(config.TenantID)
 	log.Printf("Tenant Id: %d", tenantID)
 	log.Printf("Fetching table names FROM database: %s", dbName)
-	tables := make(map[string][]string)
 
-	// Create a new connection to the specific database
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		config.Host, config.Port, config.User, config.Password, dbName)
-
-	specificDb, err := sql.Open("postgres", dsn)
+	tables, err := databaseTables(mainDb, config, dbName)
 	if err != nil {
-		log.Printf("Error connecting to specific database %s: %v", dbName, err)
+		log.Printf("Error reading tables of %s: %v", dbName, err)
 		return err
-	}
-	defer specificDb.Close()
-
-	// Test the connection
-	err = specificDb.Ping()
-	if err != nil {
-		log.Printf("Cannot ping database %s: %v", dbName, err)
-		return err
-	}
-
-	log.Printf("Successfully connected to database: %s", dbName)
-
-	// PostgreSQL query to list tables in the schema
-	tableQuery := "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public'"
-	log.Println("Executing query:", tableQuery)
-
-	rows, err := specificDb.Query(tableQuery)
-	if err != nil {
-		log.Printf("Error querying tables: %v", err)
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var tableName string
-		if err := rows.Scan(&tableName); err != nil {
-			log.Printf("Error scanning table name: %v", err)
-			return err
-		}
-
-		// PostgreSQL query to list columns in a table
-		columnsQuery := fmt.Sprintf("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '%s'", tableName)
-		columnRows, err := specificDb.Query(columnsQuery)
-		if err != nil {
-			log.Printf("Error querying columns for table %s: %v", tableName, err)
-			return err
-		}
-
-		var columns []string
-		for columnRows.Next() {
-			var columnName string
-			if err := columnRows.Scan(&columnName); err != nil {
-				log.Printf("Error scanning column name: %v", err)
-				columnRows.Close()
-				return err
-			}
-			columns = append(columns, columnName)
-		}
-		columnRows.Close()
-		tables[tableName] = columns
 	}
 
 	log.Printf("Fetched tables for %s: %v", dbName, tables)
@@ -92,7 +36,7 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 	payload := map[string]interface{}{
 		"orgId":        orgID,
 		"tenantId":     tenantID,
-		"databaseType": "postgres",
+		"databaseType": Engine(config.DBType),
 		"databaseName": dbName,
 		"tables":       tables,
 		"instanceId":   instanceId,
@@ -129,4 +73,50 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 	log.Println("Payload Sent:", jsonForLog(payloadBytes))
 
 	return nil
+}
+
+// pgTables lists the tables in schema public with their columns.
+func pgTables(specificDb *sql.DB) (map[string][]string, error) {
+	tables := make(map[string][]string)
+	// PostgreSQL query to list tables in the schema
+	tableQuery := "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public'"
+	log.Println("Executing query:", tableQuery)
+
+	rows, err := specificDb.Query(tableQuery)
+	if err != nil {
+		log.Printf("Error querying tables: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			log.Printf("Error scanning table name: %v", err)
+			return nil, err
+		}
+
+		// PostgreSQL query to list columns in a table. The name is a bind parameter: a table name
+		// is data, and one with a quote in it used to break (or rewrite) the query.
+		columnRows, err := specificDb.Query("SELECT column_name FROM information_schema.columns "+
+			"WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position", tableName)
+		if err != nil {
+			log.Printf("Error querying columns for table %s: %v", tableName, err)
+			return nil, err
+		}
+
+		var columns []string
+		for columnRows.Next() {
+			var columnName string
+			if err := columnRows.Scan(&columnName); err != nil {
+				log.Printf("Error scanning column name: %v", err)
+				columnRows.Close()
+				return nil, err
+			}
+			columns = append(columns, columnName)
+		}
+		columnRows.Close()
+		tables[tableName] = columns
+	}
+	return tables, rows.Err()
 }

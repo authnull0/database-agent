@@ -10,33 +10,22 @@ import (
 	"strconv"
 )
 
-// FetchTablePrivileges fetches the privileges for users at the database level for PostgreSQL
+// FetchTablePrivileges reports each login with its privileges on the database (PostgreSQL roles,
+// MySQL accounts)
 func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId string) error {
-	var query string
 	orgID, _ := strconv.Atoi(config.OrgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
 
 	// Agent VM IP for agent_vm_ip (AGENT_VM_IP -> private IP; never the public/ipify address)
 	publicIP := AgentIdentity(config)
 
-	query = rolePrivilegesQuery
-
-	// Execute query to get user privileges at the database level
-	rows, err := db.Query(query)
+	users, err := databaseUsers(db, config, dbName)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var username, host, role, privileges string
-		var attrs roleAttributes
-		if err := rows.Scan(&username, &host, &privileges, &role,
-			&attrs.Super, &attrs.CreateRole, &attrs.CreateDB, &attrs.Replication, &attrs.BypassRLS,
-			&attrs.ServerAccess, &attrs.AllData); err != nil {
-			return err
-		}
-
+	for _, u := range users {
+		username, host, role, privileges := u.Username, u.Host, u.Role, u.Privileges
 		log.Printf("Database Name: %s, User: %s, Host: %s, Privileges: %s, Role: %s", dbName, username, host, privileges, role)
 
 		// Send the username to the dbUser API
@@ -50,7 +39,7 @@ func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId
 			"role":         role,
 			"privilege":    privileges,
 			// For policies' privilege condition: admin, elevated or standard (privilegelevel.go).
-			"privilegeLevel": privilegeLevel(attrs),
+			"privilegeLevel": u.Level,
 			"instanceId":     instanceId,
 			"agentVmIp":      publicIP,    // Multi-host: Agent VM IP (where ProxySQL runs)
 			"hostVmIp":       config.Host, // Multi-host: Database host VM IP
