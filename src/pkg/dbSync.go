@@ -13,9 +13,9 @@ import (
 	"github.com/authnull0/database-agent/utils"
 )
 
-// FetchDatabaseStatus fetches the status of a PostgreSQL database
+// FetchDatabaseStatus reports a database, and whether its server is up, and returns the hostgroup
+// the backend gives it
 func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId string) (int, string, error) {
-	var query string
 	var data DbSyncResponse
 
 	orgID, _ := strconv.Atoi(config.OrgID)
@@ -23,15 +23,10 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	tenantID, _ := strconv.Atoi(config.TenantID)
 	log.Printf("Tenant Id: %d", tenantID)
 
-	// PostgreSQL query to check uptime
-	query = "SELECT EXTRACT(EPOCH FROM current_timestamp - pg_postmaster_start_time())::integer AS uptime"
-
-	// Execute query for database status
-	row := db.QueryRow(query)
+	// How long the server has been up: PostgreSQL's postmaster start, MySQL's Uptime status.
+	uptime, scanErr := serverUptime(db, config)
 	var status string
-	var uptime int
-
-	if err := row.Scan(&uptime); err != nil {
+	if scanErr != nil {
 		log.Printf("Database: %s STATUS: %s", dbName, "INACTIVE")
 		status = "INACTIVE"
 	} else {
@@ -71,7 +66,7 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 	payload := map[string]interface{}{
 		"orgId":        orgID,
 		"tenantId":     tenantID,
-		"databaseType": "postgres",
+		"databaseType": Engine(config.DBType),
 		"databaseName": dbName,
 		"port":         config.Port,
 		"host":         hostIP,       // Host VM IP (where database runs)

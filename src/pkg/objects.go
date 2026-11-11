@@ -1,12 +1,12 @@
 package pkg
 
 // DBConfig contains the configuration for connecting to databases
-// For PostgreSQL connections, DBType should be set to "postgres"
+// DBType is the target's engine, read through Engine(): "postgres" (or empty) or "mysql"
 type DBConfig struct {
 	OrgID        string `mapstructure:"ORG_ID"`        // Organization ID
 	TenantID     string `mapstructure:"TENANT_ID"`     // Tenant ID
-	DBType       string `mapstructure:"DB_TYPE"`       // Database type ("postgres" for PostgreSQL)
-	Port         string `mapstructure:"DB_PORT"`       // Database port (typically "5432" for PostgreSQL)
+	DBType       string `mapstructure:"DB_TYPE"`       // Database type: "postgres" or "mysql" (engine.go)
+	Port         string `mapstructure:"DB_PORT"`       // Database port (default 5432 PostgreSQL, 3306 MySQL)
 	TimeInterval string `mapstructure:"TIME_INTERVAL"` // Polling interval
 	API          string `mapstructure:"API"`           // API endpoint
 	Host         string `mapstructure:"DB_HOST"`       // Database host (legacy single-host mode)

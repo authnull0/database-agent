@@ -219,11 +219,23 @@ func sqliteLiteral(s string) (string, error) {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'", nil
 }
 
-// adminProxyUsers is pgsql_users through a connection to ProxySQL's admin interface.
-type adminProxyUsers struct{ db *sql.DB }
+// adminProxyUsers is the target engine's users table (pgsql_users or mysql_users) through a
+// connection to ProxySQL's admin interface. The zero engine is PostgreSQL's.
+type adminProxyUsers struct {
+	db     *sql.DB
+	engine string // Engine(): EngineMySQL reads mysql_users and mysql_servers
+	port   int    // the target's port: a MySQL server's hostgroup is matched on it too
+}
+
+// newAdminProxy is the users table, and servers, of config's engine.
+func newAdminProxy(db *sql.DB, config DBConfig) adminProxyUsers {
+	return adminProxyUsers{db: db, engine: Engine(config.DBType), port: targetPort(config)}
+}
+
+func (a adminProxyUsers) tables() proxyTables { return proxyTablesFor(a.engine) }
 
 func (a adminProxyUsers) Get(role string) (proxyUser, bool, error) {
-	q, err := proxyGetUserQuery(role)
+	q, err := proxyGetUserQuery(a.tables().users, role)
 	if err != nil {
 		return proxyUser{}, false, err
 	}
@@ -241,7 +253,7 @@ func (a adminProxyUsers) Get(role string) (proxyUser, bool, error) {
 }
 
 func (a adminProxyUsers) List() ([]proxyUser, error) {
-	rows, err := a.db.Query("SELECT username, password, default_hostgroup, comment FROM pgsql_users")
+	rows, err := a.db.Query("SELECT username, password, default_hostgroup, comment FROM " + a.tables().users)
 	if err != nil {
 		return nil, err
 	}
@@ -264,17 +276,21 @@ func (a adminProxyUsers) Put(u proxyUser) error {
 	if err != nil {
 		return err
 	}
-	q, err := proxyPutUserQuery(u, found)
+	q, err := proxyPutUserQuery(a.tables().users, u, found)
 	if err != nil {
 		return err
 	}
 	if _, err := a.db.Exec(q); err != nil {
 		return err
 	}
-	if _, err := a.db.Exec("LOAD PGSQL USERS TO RUNTIME"); err != nil {
+	return a.loadUsers()
+}
+
+func (a adminProxyUsers) loadUsers() error {
+	if _, err := a.db.Exec("LOAD " + a.tables().keyword + " USERS TO RUNTIME"); err != nil {
 		return fmt.Errorf("loading users to runtime: %w", err)
 	}
-	if _, err := a.db.Exec("SAVE PGSQL USERS TO DISK"); err != nil {
+	if _, err := a.db.Exec("SAVE " + a.tables().keyword + " USERS TO DISK"); err != nil {
 		return fmt.Errorf("saving users to disk: %w", err)
 	}
 	return nil
@@ -286,28 +302,23 @@ func (a adminProxyUsers) Delete(role string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := a.db.Exec("DELETE FROM pgsql_users WHERE username = " + r); err != nil {
+	if _, err := a.db.Exec("DELETE FROM " + a.tables().users + " WHERE username = " + r); err != nil {
 		return err
 	}
-	if _, err := a.db.Exec("LOAD PGSQL USERS TO RUNTIME"); err != nil {
-		return fmt.Errorf("loading users to runtime: %w", err)
-	}
-	if _, err := a.db.Exec("SAVE PGSQL USERS TO DISK"); err != nil {
-		return fmt.Errorf("saving users to disk: %w", err)
-	}
-	return nil
+	return a.loadUsers()
 }
 
-func proxyGetUserQuery(role string) (string, error) {
+func proxyGetUserQuery(table, role string) (string, error) {
 	r, err := sqliteLiteral(role)
 	if err != nil {
 		return "", err
 	}
-	return "SELECT password, default_hostgroup, comment FROM pgsql_users WHERE username = " + r + " LIMIT 1", nil
+	return "SELECT password, default_hostgroup, comment FROM " + table + " WHERE username = " + r + " LIMIT 1", nil
 }
 
-// proxyPutUserQuery inserts the row, or updates the existing one (found).
-func proxyPutUserQuery(u proxyUser, found bool) (string, error) {
+// proxyPutUserQuery inserts the row into table (pgsql_users or mysql_users: the columns are the
+// same), or updates the existing one (found).
+func proxyPutUserQuery(table string, u proxyUser, found bool) (string, error) {
 	name, err := sqliteLiteral(u.Username)
 	if err != nil {
 		return "", err
@@ -321,11 +332,11 @@ func proxyPutUserQuery(u proxyUser, found bool) (string, error) {
 		return "", err
 	}
 	if found {
-		return fmt.Sprintf("UPDATE pgsql_users SET password = %s, default_hostgroup = %d, comment = %s WHERE username = %s",
-			password, u.DefaultHostgroup, comment, name), nil
+		return fmt.Sprintf("UPDATE %s SET password = %s, default_hostgroup = %d, comment = %s WHERE username = %s",
+			table, password, u.DefaultHostgroup, comment, name), nil
 	}
-	return fmt.Sprintf("INSERT INTO pgsql_users (username, password, default_hostgroup, active, use_ssl, comment) VALUES (%s, %s, %d, 1, 0, %s)",
-		name, password, u.DefaultHostgroup, comment), nil
+	return fmt.Sprintf("INSERT INTO %s (username, password, default_hostgroup, active, use_ssl, comment) VALUES (%s, %s, %d, 1, 0, %s)",
+		table, name, password, u.DefaultHostgroup, comment), nil
 }
 
 // --- Rotation ---
@@ -335,14 +346,36 @@ func proxyPutUserQuery(u proxyUser, found bool) (string, error) {
 // fails until the next rotation, rather than the database keeping a password that ProxySQL
 // no longer has and nobody can rotate away from.
 func rotateRolePassword(pg *sql.DB, proxy proxyUsers, role, host string, hostgroup int, now time.Time) (string, error) {
-	if err := ValidateRoleName(role); err != nil {
+	return rotateRolePasswordWith(pgPasswordSetter(pg), proxy, role, host, hostgroup, now)
+}
+
+// passwordSetter sets a role's password in the database: pgSetPassword, or mysqlSetPassword.
+type passwordSetter struct {
+	validate func(role string) error
+	set      func(role, password string) error
+}
+
+func pgPasswordSetter(pg *sql.DB) passwordSetter {
+	return passwordSetter{ValidateRoleName, func(r, p string) error { return pgSetPassword(pg, r, p) }}
+}
+
+// passwordSetterFor is the target's engine's setter. MySQL's never creates an account.
+func passwordSetterFor(server *sql.DB, config DBConfig) passwordSetter {
+	if isMySQL(config) {
+		return passwordSetter{validateMySQLUserName, func(u, p string) error { return mysqlSetPassword(server, u, p) }}
+	}
+	return pgPasswordSetter(server)
+}
+
+func rotateRolePasswordWith(setter passwordSetter, proxy proxyUsers, role, host string, hostgroup int, now time.Time) (string, error) {
+	if err := setter.validate(role); err != nil {
 		return "", err
 	}
 	password, err := GenerateRandomPassword(rolePasswordLength)
 	if err != nil {
 		return "", err
 	}
-	if err := pgSetPassword(pg, role, password); err != nil {
+	if err := setter.set(role, password); err != nil {
 		return "", err
 	}
 	err = proxy.Put(proxyUser{
@@ -406,6 +439,16 @@ func EnsureRolePassword(pg *sql.DB, proxy proxyUsers, role, host string, hostgro
 // doesn't manage on this host are left alone: legacy rows are adopted at their next checkout.
 // It returns the roles it rotated; one role failing doesn't stop the others.
 func RotateDuePasswords(pg *sql.DB, proxy proxyUsers, host string, now time.Time, interval time.Duration) ([]string, error) {
+	return rotateDuePasswords(pgPasswordSetter(pg), proxy, host, now, interval)
+}
+
+// rotateDuePasswordsFor is the sweep for a target of either engine. Its rows are recorded under
+// managedHost: host:port for MySQL.
+func rotateDuePasswordsFor(server *sql.DB, proxy proxyUsers, config DBConfig, now time.Time, interval time.Duration) ([]string, error) {
+	return rotateDuePasswords(passwordSetterFor(server, config), proxy, managedHost(config), now, interval)
+}
+
+func rotateDuePasswords(setter passwordSetter, proxy proxyUsers, host string, now time.Time, interval time.Duration) ([]string, error) {
 	users, err := proxy.List()
 	if err != nil {
 		return nil, fmt.Errorf("listing ProxySQL users: %w", err)
@@ -418,7 +461,7 @@ func RotateDuePasswords(pg *sql.DB, proxy proxyUsers, host string, now time.Time
 		if !ok || h != host || isVaultManaged(u.Comment) || !rotationDue(u, now, interval) {
 			continue
 		}
-		if _, err := rotateRolePassword(pg, proxy, u.Username, host, u.DefaultHostgroup, now); err != nil {
+		if _, err := rotateRolePasswordWith(setter, proxy, u.Username, host, u.DefaultHostgroup, now); err != nil {
 			errs = append(errs, fmt.Sprintf("role %q: %v", u.Username, err))
 			continue
 		}
@@ -430,7 +473,8 @@ func RotateDuePasswords(pg *sql.DB, proxy proxyUsers, host string, now time.Time
 	return rotated, nil
 }
 
-// RotateDuePasswordsForHost is RotateDuePasswords with the agent's own ProxySQL connection.
+// RotateDuePasswordsForHost is the sweep with the agent's own ProxySQL connection, for the
+// target's engine (mysql_users and ALTER USER for MySQL).
 func RotateDuePasswordsForHost(pg *sql.DB, config DBConfig, now time.Time) error {
 	interval := RotationInterval()
 	proxyDB, err := ConnectToProxysqlDB(config)
@@ -438,7 +482,7 @@ func RotateDuePasswordsForHost(pg *sql.DB, config DBConfig, now time.Time) error
 		return err
 	}
 	defer proxyDB.Close()
-	rotated, err := RotateDuePasswords(pg, adminProxyUsers{proxyDB}, config.Host, now, interval)
+	rotated, err := rotateDuePasswordsFor(pg, newAdminProxy(proxyDB, config), config, now, interval)
 	if len(rotated) > 0 {
 		log.Printf("Scheduled rotation: %d managed role(s) on %s", len(rotated), config.Host)
 	}

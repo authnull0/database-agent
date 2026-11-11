@@ -117,10 +117,13 @@ func shipRecordingFile(path string, bucket int64, targets []recordingTarget) err
 		st["line"] = line
 		i := 0
 		if len(targets) > 1 {
+			// ProxySQL numbers each engine's hostgroups separately, so a line is placed by its
+			// engine and hostgroup; a line naming no engine (an older ProxySQL) by hostgroup alone.
 			hg, _ := st["hg"].(float64)
+			engine, _ := st["engine"].(string)
 			i = -1
 			for j, t := range targets {
-				if float64(t.hostgroup) == hg {
+				if float64(t.hostgroup) == hg && (engine == "" || Engine(engine) == Engine(t.cfg.DBType)) {
 					i = j
 					break
 				}
@@ -166,29 +169,40 @@ func RunRecordingsLoop(targets []DBConfig, dir string, interval time.Duration, s
 		if !credentialConfigured() {
 			continue
 		}
-		var list []recordingTarget
-		for _, cfg := range targets {
-			if k := strings.ToLower(cfg.DBType); k != "" && k != "postgres" && k != "postgresql" {
-				continue
+		list := recordingTargets(targets, func(cfg DBConfig) (int, bool, error) {
+			proxyDB, err := ConnectToProxysqlDB(cfg)
+			if err != nil {
+				log.Printf("Session recording for %s: ProxySQL: %v", cfg.Host, err)
+				return 0, false, err
 			}
-			hg := -1
-			if len(targets) > 1 {
-				proxyDB, err := ConnectToProxysqlDB(cfg)
-				if err != nil {
-					log.Printf("Session recording for %s: ProxySQL: %v", cfg.Host, err)
-					continue
-				}
-				h, found, err := adminProxyUsers{proxyDB}.HostgroupFor(cfg.Host)
-				proxyDB.Close()
-				if err != nil || !found {
-					continue
-				}
-				hg = h
-			}
-			list = append(list, recordingTarget{cfg: cfg, hostgroup: hg})
-		}
+			defer proxyDB.Close()
+			return newAdminProxy(proxyDB, cfg).HostgroupFor(cfg.Host)
+		})
 		if err := shipRecordings(dir, time.Now(), list); err != nil {
 			log.Printf("Session recording: %v", err)
 		}
 	}
+}
+
+// recordingTargets are the servers whose recordings are uploaded this round: PostgreSQL and MySQL
+// targets alike. A spool line names its hostgroup (hg), so with more than one server each is placed
+// by its hostgroup -- looked up among its own engine's servers -- and one whose hostgroup is not
+// known yet waits for a later round. A lone server takes every line.
+func recordingTargets(targets []DBConfig, lookup func(DBConfig) (int, bool, error)) []recordingTarget {
+	var list []recordingTarget
+	for _, cfg := range targets {
+		if e := Engine(cfg.DBType); e != EnginePostgres && e != EngineMySQL {
+			continue
+		}
+		hg := -1
+		if len(targets) > 1 {
+			h, found, err := lookup(cfg)
+			if err != nil || !found {
+				continue
+			}
+			hg = h
+		}
+		list = append(list, recordingTarget{cfg: cfg, hostgroup: hg})
+	}
+	return list
 }

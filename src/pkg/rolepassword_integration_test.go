@@ -241,7 +241,7 @@ func TestIntegrationProxySQLAdminUsersQuoteHostileValues(t *testing.T) {
 	if err := db.Ping(); err != nil {
 		t.Fatal(err)
 	}
-	p := adminProxyUsers{db}
+	p := adminProxyUsers{db: db}
 	hostile := testRolePrefix + `o'brien'); DELETE FROM pgsql_users; --`
 	plain := testRolePrefix + "plain"
 	cleanup := func() {

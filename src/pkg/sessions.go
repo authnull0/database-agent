@@ -15,7 +15,8 @@ import (
 
 const sessionsReportPath = "/api/v1/databaseService/agent/sessions/report"
 
-// processRow is a row of stats_pgsql_processlist, as far as the report needs it.
+// processRow is a row of stats_pgsql_processlist or stats_mysql_processlist, as far as the report
+// needs it.
 type processRow struct {
 	ID         int64
 	User       string
@@ -33,11 +34,20 @@ type sessionAdmin interface {
 	Kill(id int64) (ok bool, detail string, err error)
 }
 
-type adminSessions struct{ db *sql.DB }
+// adminSessions is ProxySQL's sessions for one engine: MySQL's and PostgreSQL's are separate lists.
+type adminSessions struct {
+	db     *sql.DB
+	engine string // Engine(): EngineMySQL reads stats_mysql_processlist
+}
 
 func (a adminSessions) List() ([]processRow, error) {
-	rows, err := a.db.Query(`SELECT SessionID, coalesce(user, ''), coalesce(database, ''), coalesce(cli_host, ''),
-		coalesce(cli_port, 0), coalesce(hostgroup, -1), time_ms, coalesce(command, '') FROM stats_pgsql_processlist`)
+	// The two lists differ in one column's name: the database is "db" for MySQL.
+	table, database := "stats_pgsql_processlist", "database"
+	if a.engine == EngineMySQL {
+		table, database = "stats_mysql_processlist", "db"
+	}
+	rows, err := a.db.Query(`SELECT SessionID, coalesce(user, ''), coalesce(` + database + `, ''), coalesce(cli_host, ''),
+		coalesce(cli_port, 0), coalesce(hostgroup, -1), time_ms, coalesce(command, '') FROM ` + table)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +65,16 @@ func (a adminSessions) List() ([]processRow, error) {
 
 // Kill sends PGSQL KILL CONNECTION, which answers with a row (killed, detail). A ProxySQL without
 // the command answers with an error: the kill is reported failed with it.
+//
+// A MySQL session is ended with the admin interface's own KILL CONNECTION, which answers OK, or an
+// error that is the failed kill's reason.
 func (a adminSessions) Kill(id int64) (bool, string, error) {
+	if a.engine == EngineMySQL {
+		if _, err := a.db.Exec("KILL CONNECTION " + strconv.FormatInt(id, 10)); err != nil {
+			return false, "", err
+		}
+		return true, "session killed", nil
+	}
 	var killed int
 	var detail string
 	if err := a.db.QueryRow("PGSQL KILL CONNECTION "+strconv.FormatInt(id, 10)).Scan(&killed, &detail); err != nil {
@@ -93,7 +112,7 @@ func (t *sessionsTracker) round(admin sessionAdmin, cfg DBConfig, hostgroup int,
 	if !credentialConfigured() {
 		return nil
 	}
-	if k := strings.ToLower(cfg.DBType); k != "" && k != "postgres" && k != "postgresql" {
+	if e := Engine(cfg.DBType); e != EnginePostgres && e != EngineMySQL {
 		return nil
 	}
 	rows, err := admin.List()
@@ -139,9 +158,25 @@ func (t *sessionsTracker) round(admin sessionAdmin, cfg DBConfig, hostgroup int,
 	return nil
 }
 
+// singleServerPerEngine says, for each target, whether it is the only one of its engine: a session
+// not yet in any hostgroup is in its engine's process list, so it is that server's when the agent
+// serves no other server of the engine (a MySQL target beside a PostgreSQL one is still alone).
+func singleServerPerEngine(targets []DBConfig) []bool {
+	count := map[string]int{}
+	for _, t := range targets {
+		count[Engine(t.DBType)]++
+	}
+	out := make([]bool, len(targets))
+	for i, t := range targets {
+		out[i] = count[Engine(t.DBType)] == 1
+	}
+	return out
+}
+
 // RunSessionsLoop reports every interval for each server until stop is closed.
 func RunSessionsLoop(targets []DBConfig, interval time.Duration, stop <-chan struct{}) {
 	trackers := make([]sessionsTracker, len(targets))
+	single := singleServerPerEngine(targets)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -159,9 +194,9 @@ func RunSessionsLoop(targets []DBConfig, interval time.Duration, stop <-chan str
 				log.Printf("Live sessions for %s: ProxySQL: %v", cfg.Host, err)
 				continue
 			}
-			hg, found, err := adminProxyUsers{proxyDB}.HostgroupFor(cfg.Host)
+			hg, found, err := newAdminProxy(proxyDB, cfg).HostgroupFor(cfg.Host)
 			if err == nil && found {
-				if err := trackers[i].round(adminSessions{proxyDB}, cfg, hg, len(targets) == 1); err != nil {
+				if err := trackers[i].round(adminSessions{db: proxyDB, engine: Engine(cfg.DBType)}, cfg, hg, single[i]); err != nil {
 					log.Printf("Live sessions for %s: %v", cfg.Host, err)
 				}
 			}
