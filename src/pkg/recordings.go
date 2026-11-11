@@ -178,7 +178,7 @@ func RunRecordingsLoop(targets []DBConfig, dir string, interval time.Duration, s
 					log.Printf("Session recording for %s: ProxySQL: %v", cfg.Host, err)
 					continue
 				}
-				h, found, err := adminProxyUsers{proxyDB}.HostgroupFor(cfg.Host)
+				h, found, err := newAdminProxy(proxyDB, cfg).HostgroupFor(cfg.Host)
 				proxyDB.Close()
 				if err != nil || !found {
 					continue

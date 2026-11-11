@@ -159,7 +159,7 @@ func RunSessionsLoop(targets []DBConfig, interval time.Duration, stop <-chan str
 				log.Printf("Live sessions for %s: ProxySQL: %v", cfg.Host, err)
 				continue
 			}
-			hg, found, err := adminProxyUsers{proxyDB}.HostgroupFor(cfg.Host)
+			hg, found, err := newAdminProxy(proxyDB, cfg).HostgroupFor(cfg.Host)
 			if err == nil && found {
 				if err := trackers[i].round(adminSessions{proxyDB}, cfg, hg, len(targets) == 1); err != nil {
 					log.Printf("Live sessions for %s: %v", cfg.Host, err)

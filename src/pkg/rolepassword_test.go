@@ -160,18 +160,18 @@ func TestSqliteLiteral(t *testing.T) {
 
 func TestProxyQueriesQuoteEveryValue(t *testing.T) {
 	u := proxyUser{Username: "o'brien", Password: "p'w", DefaultHostgroup: 3, Comment: "c'm"}
-	ins, err := proxyPutUserQuery(u, false)
+	ins, err := proxyPutUserQuery("pgsql_users", u, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := `INSERT INTO pgsql_users (username, password, default_hostgroup, active, use_ssl, comment) VALUES ('o''brien', 'p''w', 3, 1, 0, 'c''m')`; ins != want {
 		t.Fatalf("insert:\n got %s\nwant %s", ins, want)
 	}
-	upd, _ := proxyPutUserQuery(u, true)
+	upd, _ := proxyPutUserQuery("pgsql_users", u, true)
 	if want := `UPDATE pgsql_users SET password = 'p''w', default_hostgroup = 3, comment = 'c''m' WHERE username = 'o''brien'`; upd != want {
 		t.Fatalf("update:\n got %s\nwant %s", upd, want)
 	}
-	get, _ := proxyGetUserQuery("o'brien")
+	get, _ := proxyGetUserQuery("pgsql_users", "o'brien")
 	if want := `SELECT password, default_hostgroup, comment FROM pgsql_users WHERE username = 'o''brien' LIMIT 1`; get != want {
 		t.Fatalf("get:\n got %s\nwant %s", get, want)
 	}

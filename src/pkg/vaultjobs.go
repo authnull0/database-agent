@@ -47,14 +47,20 @@ type hostgroups interface {
 	HostgroupFor(host string) (int, bool, error)
 }
 
-// HostgroupFor reads pgsql_servers through the admin interface.
+// HostgroupFor reads the engine's servers through the admin interface: pgsql_servers by hostname,
+// as always; mysql_servers by hostname and the target's port, so two MySQL servers on one IP are
+// told apart.
 func (a adminProxyUsers) HostgroupFor(host string) (int, bool, error) {
 	lit, err := sqliteLiteral(host)
 	if err != nil {
 		return 0, false, err
 	}
+	where := "hostname = " + lit
+	if a.engine == EngineMySQL && a.port > 0 {
+		where += fmt.Sprintf(" AND port = %d", a.port)
+	}
 	var hg int
-	err = a.db.QueryRow("SELECT hostgroup_id FROM pgsql_servers WHERE hostname = " + lit + " ORDER BY hostgroup_id LIMIT 1").Scan(&hg)
+	err = a.db.QueryRow("SELECT hostgroup_id FROM " + a.tables().servers + " WHERE " + where + " ORDER BY hostgroup_id LIMIT 1").Scan(&hg)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
@@ -378,7 +384,7 @@ func ProcessVaultJobsForHost(pg *sql.DB, config DBConfig, now time.Time) error {
 		return err
 	}
 	defer proxyDB.Close()
-	admin := adminProxyUsers{proxyDB}
+	admin := newAdminProxy(proxyDB, config)
 	_, err = ProcessVaultJobs(pg, admin, admin, config, now)
 	return err
 }
