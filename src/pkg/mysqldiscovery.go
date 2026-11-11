@@ -43,7 +43,7 @@ func listDatabases(db *sql.DB, config DBConfig) ([]string, error) {
 	for _, dbName := range databases {
 		// Skip system databases
 		if isSystemDatabase(dbName, systemKey) {
-			log.Printf("Skipping system database: %s", dbName)
+			logDebugf("Skipping system database: %s", dbName)
 			continue
 		}
 		out = append(out, dbName)
@@ -172,7 +172,7 @@ func databaseTables(db *sql.DB, config DBConfig, dbName string) (map[string][]st
 	}
 	defer specificDb.Close()
 
-	log.Printf("Successfully connected to database: %s", dbName)
+	logDebugf("Successfully connected to database: %s", dbName)
 	return pgTables(specificDb)
 }
 

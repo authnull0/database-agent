@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -14,56 +15,70 @@ import (
 // FetchTablePrivileges reports each login with its privileges on the database (PostgreSQL roles,
 // MySQL accounts)
 func FetchTablePrivileges(db *sql.DB, dbName string, config DBConfig, instanceId string) error {
-	// Agent VM IP for agent_vm_ip (AGENT_VM_IP -> private IP; never the public/ipify address)
-	publicIP := AgentIdentity(config)
-
 	users, err := databaseUsers(db, config, dbName)
 	if err != nil {
 		return err
 	}
+	reportDatabaseUsers(users, dbName, config, instanceId)
+	return nil
+}
 
+// syncSummary is the one line a sync logs per database at the default level.
+func syncSummary(dbName string, config DBConfig, users, failed int) string {
+	return fmt.Sprintf("Synced %s (%s, %s:%d): %d users, %d failed",
+		dbName, Engine(config.DBType), config.Host, targetPort(config), users, failed)
+}
+
+// reportDatabaseUsers posts each login to the control plane's dbUser API. A failure is logged with
+// its user (and status, for an answer other than 200); the per-user detail only at LOG_LEVEL=debug;
+// and then one summary line for the database.
+func reportDatabaseUsers(users []databaseUser, dbName string, config DBConfig, instanceId string) {
+	// Agent VM IP for agent_vm_ip (AGENT_VM_IP -> private IP; never the public/ipify address)
+	publicIP := AgentIdentity(config)
+	userAPIURL := config.API + "/api/v1/databaseService/dbUser"
+	client := &http.Client{}
+	failed := 0
 	for _, u := range users {
-		log.Printf("Database Name: %s, User: %s, Host: %s, Privileges: %s, Role: %s, Tables: %d",
-			dbName, u.Username, u.Host, u.Privileges, u.Role, len(u.TablePrivileges))
-
-		// Send the username to the dbUser API
-		userPayload := dbUserPayload(config, dbName, instanceId, publicIP, u)
-
-		userPayloadBytes, err := json.Marshal(userPayload)
-		if err != nil {
-			log.Printf("Error while marshalling the user payload: %v", err)
-			continue
+		if err := postDatabaseUser(client, userAPIURL, dbUserPayload(config, dbName, instanceId, publicIP, u), u, dbName); err != nil {
+			failed++
+			log.Printf("Reporting user %s of %s on %s: %v", u.Username, dbName, config.Host, err)
 		}
+	}
+	log.Print(syncSummary(dbName, config, len(users), failed))
+}
 
-		userAPIURL := config.API + "/api/v1/databaseService/dbUser"
-		log.Printf("Sending User Payload to API %s", userAPIURL)
+// postDatabaseUser sends one login's payload. Anything but a 200 is an error.
+func postDatabaseUser(client *http.Client, userAPIURL string, userPayload interface{}, u databaseUser, dbName string) error {
+	logDebugf("Database Name: %s, User: %s, Host: %s, Privileges: %s, Role: %s, Tables: %d",
+		dbName, u.Username, u.Host, u.Privileges, u.Role, len(u.TablePrivileges))
 
-		httpReq, err := http.NewRequest("POST", userAPIURL, bytes.NewBuffer(userPayloadBytes))
-		log.Println("Payload Sent:")
-		log.Println(jsonForLog(userPayloadBytes))
-
-		if err != nil {
-			log.Printf("Error while creating user request: %v", err)
-			continue
-		}
-
-		httpReq.Header.Set("Content-Type", "application/json")
-		client := &http.Client{}
-		httpResp, err := doAPI(client, httpReq)
-		if err != nil {
-			log.Printf("Error while sending user request: %v", err)
-			continue
-		}
-		defer httpResp.Body.Close()
-
-		userResponseBody, err := io.ReadAll(httpResp.Body)
-		if err != nil {
-			log.Printf("Error while reading user response body: %v", err)
-			continue
-		}
-		log.Printf("Response from dbUser API: %v", string(userResponseBody))
+	userPayloadBytes, err := json.Marshal(userPayload)
+	if err != nil {
+		return fmt.Errorf("marshalling the payload: %w", err)
 	}
 
+	logDebugf("Sending User Payload to API %s", userAPIURL)
+	httpReq, err := http.NewRequest("POST", userAPIURL, bytes.NewBuffer(userPayloadBytes))
+	if err != nil {
+		return fmt.Errorf("creating the request: %w", err)
+	}
+	logDebugf("Payload Sent: %s", jsonForLog(userPayloadBytes))
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpResp, err := doAPI(client, httpReq)
+	if err != nil {
+		return fmt.Errorf("sending: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	userResponseBody, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return fmt.Errorf("reading the response: %w", err)
+	}
+	logDebugf("Response from dbUser API: %v", string(userResponseBody))
+	if httpResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("the control plane answered %d: %s", httpResp.StatusCode, jsonForLog(userResponseBody))
+	}
 	return nil
 }
 

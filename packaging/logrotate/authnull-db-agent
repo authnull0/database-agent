@@ -1,0 +1,12 @@
+# logrotate for the AuthNull database agent. Install as /etc/logrotate.d/authnull-db-agent, mode 0644.
+# copytruncate: the agent holds the log open (O_APPEND) and is not told to reopen it.
+/var/log/authnull-db-agent.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0640 root adm
+}

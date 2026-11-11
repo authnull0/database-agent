@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -14,10 +15,10 @@ import (
 
 func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId string) error {
 	orgID, _ := strconv.Atoi(config.OrgID)
-	log.Printf("Org Id: %d", orgID)
+	logDebugf("Org Id: %d", orgID)
 	tenantID, _ := strconv.Atoi(config.TenantID)
-	log.Printf("Tenant Id: %d", tenantID)
-	log.Printf("Fetching table names FROM database: %s", dbName)
+	logDebugf("Tenant Id: %d", tenantID)
+	logDebugf("Fetching table names FROM database: %s", dbName)
 
 	tables, err := databaseTables(mainDb, config, dbName)
 	if err != nil {
@@ -25,11 +26,11 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 		return err
 	}
 
-	log.Printf("Fetched tables for %s: %v", dbName, tables)
+	logDebugf("Fetched tables for %s: %v", dbName, tables)
 
 	// Skip sending if no tables were found
 	if len(tables) == 0 {
-		log.Printf("No tables found in database %s, skipping API call", dbName)
+		logDebugf("No tables found in database %s, skipping API call", dbName)
 		return nil
 	}
 
@@ -44,7 +45,7 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 		"agentVmIp":    AgentIdentity(config), // Agent VM IP (AGENT_VM_IP -> private IP)
 	}
 
-	log.Printf("Payload created for %s: %+v", dbName, payload)
+	logDebugf("Payload created for %s: %+v", dbName, payloadForLog(payload))
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -53,7 +54,7 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 	}
 
 	api := config.API + "/api/v1/databaseService/dbTable"
-	log.Printf("Sending table names to API %s", api)
+	logDebugf("Sending table names to API %s", api)
 
 	client := &http.Client{}
 	httpReq, err := http.NewRequest("POST", api, bytes.NewBuffer(payloadBytes))
@@ -69,9 +70,14 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 	defer res.Body.Close()
 
 	bodyBytes, err := io.ReadAll(res.Body)
-	log.Println("API Response:", string(bodyBytes))
-	log.Println("Payload Sent:", jsonForLog(payloadBytes))
-
+	if err != nil {
+		return fmt.Errorf("dbTable: read response: %w", err)
+	}
+	logDebugf("API Response: %s", jsonForLog(bodyBytes))
+	logDebugf("Payload Sent: %s", jsonForLog(payloadBytes))
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("dbTable: the control plane answered %d", res.StatusCode)
+	}
 	return nil
 }
 
@@ -80,7 +86,7 @@ func pgTables(specificDb *sql.DB) (map[string][]string, error) {
 	tables := make(map[string][]string)
 	// PostgreSQL query to list tables in the schema
 	tableQuery := "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public'"
-	log.Println("Executing query:", tableQuery)
+	logDebugf("Executing query: %s", tableQuery)
 
 	rows, err := specificDb.Query(tableQuery)
 	if err != nil {

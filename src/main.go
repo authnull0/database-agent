@@ -64,9 +64,12 @@ func loadConfig(path string) (pkg.DBConfig, error) {
 			"interval is set per tenant in the AuthNull console")
 	}
 
+	// LOG_LEVEL=debug, in db.env or the environment, adds the per-user, per-table and per-payload
+	// detail (pkg/logdebug.go). Unset, the log carries failures, changes and one line per database.
+	pkg.SetLogLevel(viper.GetString("LOG_LEVEL"))
+
 	var config pkg.DBConfig
 	err = viper.Unmarshal(&config)
-	log.Printf("MAIN FUNCTION")
 	log.Printf("Org ID: %s", config.OrgID)
 	log.Printf("Tenant ID: %s", config.TenantID)
 
@@ -195,10 +198,10 @@ func startAgent(exit chan struct{}) {
 	for {
 		select {
 		case <-ticker.C:
-			log.Default().Println("DB Synchronization Started...")
+			pkg.Debugf("DB Synchronization Started...")
 
 			for _, h := range dbHandles {
-				log.Printf("Syncing database %s", h.Cfg.Host)
+				pkg.Debugf("Syncing database %s", h.Cfg.Host)
 
 				if err := pkg.FetchDatabaseDetails(h.Conn, h.Cfg); err != nil {
 					log.Printf("Sync failed for %s: %v", h.Cfg.Host, err)
@@ -222,6 +225,21 @@ func startAgent(exit chan struct{}) {
 	}
 }
 
+// openLogFile opens the agent's log for appending, 0640: it names every database user and the
+// agent's addresses. A log an older agent created 0644 is tightened. It is rotated by logrotate
+// with copytruncate (packaging/logrotate/authnull-db-agent), which O_APPEND keeps correct.
+func openLogFile(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0640)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Chmod(0640); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
 func main() {
 	// Command-line flags for user inputs
 	// dbPort := flag.String("port", "", "Database port")
@@ -240,7 +258,7 @@ func main() {
 	// }
 
 	fileName := "/var/log/authnull-db-agent.log"
-	logFile, err := os.OpenFile(fileName, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0644)
+	logFile, err := openLogFile(fileName)
 	if err != nil {
 		log.Panic(err)
 	}

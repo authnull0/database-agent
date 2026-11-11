@@ -22,7 +22,7 @@ func ConnectToProxysqlDB(config DBConfig) (*sql.DB, error) {
 		return nil, fmt.Errorf("error pinging ProxySQL: %v", err)
 	}
 
-	log.Println("Successfully connected to ProxySQL")
+	logDebugf("Successfully connected to ProxySQL")
 	return db, nil
 }
 
@@ -81,7 +81,7 @@ func initializeProxySQL(proxysqlDB *sql.DB, config DBConfig, hostgroup int) {
 		if err != nil {
 			log.Printf("ProxySQL init query warning: %s - %v", query, err)
 		} else {
-			log.Printf("ProxySQL init query success: %s", query)
+			logDebugf("ProxySQL init query success: %s", query)
 		}
 	}
 
@@ -199,7 +199,7 @@ func updateHost(proxysqlDB *sql.DB, config DBConfig, hostname string, hostgroupI
 			return fmt.Errorf("failed to check server hostgroup: %w", err)
 		}
 		if current != 0 {
-			log.Printf("No Need to update ProxySQL server: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
+			logDebugf("No Need to update ProxySQL server: hostgroup=%d, hostname=%s, port=%d", hostgroupID, hostname, port)
 			return nil
 		}
 		updateQuery := fmt.Sprintf("UPDATE %s SET hostgroup_id = %d WHERE hostname = %s AND port = %d", t.servers, hostgroupID, host, port)

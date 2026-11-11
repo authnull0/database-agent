@@ -29,6 +29,29 @@ Command to run agent
 
 
 
+## Logging
+
+The agent writes `/var/log/authnull-db-agent.log` itself, mode 0640 (an older 0644 file is
+tightened at start).
+
+**Level.** By default the log carries failures (with the control plane's status code for a
+refused call), what the agent changed (rotations, vault jobs, kills, ProxySQL server moves), and
+one line per database per sync:
+
+    Synced appdb (postgres, 192.168.122.175:5432): 42 users, 0 failed
+
+`LOG_LEVEL=debug`, in `db.env` or the service's environment, adds the per-user, per-table and
+per-payload detail and every successful connection (payloads with their secrets redacted). That
+is tens of thousands of lines an hour on a busy install: turn it on to chase a problem, then off.
+
+**Rotation.** Install `packaging/logrotate/authnull-db-agent`:
+
+    sudo install -m 0644 packaging/logrotate/authnull-db-agent /etc/logrotate.d/authnull-db-agent
+    sudo logrotate -d /etc/logrotate.d/authnull-db-agent   # dry run
+
+Daily, 14 days kept, compressed from the second day. It uses `copytruncate` because the agent
+holds the file open and is not told to reopen it (a line written during the copy can be lost).
+
 ## Identity
 
 The agent authenticates to the control plane with its install's credential:
