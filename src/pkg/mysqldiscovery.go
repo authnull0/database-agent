@@ -65,9 +65,14 @@ func serverUptime(db *sql.DB, config DBConfig) (int, error) {
 }
 
 // databaseUsers lists the logins with their privileges on dbName: the database's and its tables'.
+// The accounts excludedAccount names are left out.
 func databaseUsers(db *sql.DB, config DBConfig, dbName string) ([]databaseUser, error) {
 	if isMySQL(config) {
-		return mysqlDatabaseUsers(db, dbName)
+		users, err := mysqlDatabaseUsers(db, dbName)
+		if err != nil {
+			return nil, err
+		}
+		return filterExcludedAccounts(config, users), nil
 	}
 	rows, err := db.Query(rolePrivilegesQuery, dbName)
 	if err != nil {
@@ -89,6 +94,7 @@ func databaseUsers(db *sql.DB, config DBConfig, dbName string) ([]databaseUser, 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	out = filterExcludedAccounts(config, out)
 
 	// Table privileges can only be read from a connection to dbName. Without one, the logins go
 	// out with their database privileges alone.

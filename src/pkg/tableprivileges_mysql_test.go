@@ -31,7 +31,11 @@ func TestMySQLTablePrivileges(t *testing.T) {
 		}
 	}
 
-	users, err := databaseUsers(admin, cfg, dbName)
+	// The agent's own login is never reported: read as if the agent were someone else, so the test's
+	// account shows up as any other admin would.
+	other := cfg
+	other.User = "agent_it_someone_else"
+	users, err := databaseUsers(admin, other, dbName)
 	if err != nil {
 		t.Fatal(err)
 	}

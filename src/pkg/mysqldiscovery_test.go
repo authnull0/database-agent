@@ -110,9 +110,9 @@ func TestMySQLDiscovery(t *testing.T) {
 	if u := byName[user+"@%"]; u.Privileges != "INSERT, SELECT" || u.Level != PrivilegeStandard || u.Role != "User" {
 		t.Errorf("%s: %+v", user, u)
 	}
-	// The test's own account: CREATE USER on *.* (admin), ALL on its database.
-	if u := byName[cfg.User+"@%"]; u.Privileges != "ALL PRIVILEGES" || u.Level != PrivilegeAdmin || u.Role != "Admin" {
-		t.Errorf("%s: %+v", cfg.User, u)
+	// The test's own account is the agent's login here: never brought into AuthNull.
+	if u, listed := byName[cfg.User+"@%"]; listed {
+		t.Errorf("the agent's own login was listed: %+v", u)
 	}
 
 	tables, err := databaseTables(admin, cfg, dbName)

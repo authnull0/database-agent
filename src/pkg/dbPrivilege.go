@@ -86,7 +86,8 @@ func postDatabaseUser(client *http.Client, userAPIURL string, userPayload interf
 // CREATE and TEMPORARY: each one held, through PUBLIC or a role it inherits from included), the
 // console's Admin/User label, and the attributes privilegeLevel reads. A superuser holds ALL
 // PRIVILEGES. The table privileges are read separately, from a connection to that database
-// (pgTablePrivilegesQuery).
+// (pgTablePrivilegesQuery). The built-in postgres role and the agent's own login are left out
+// afterwards, by excludedAccount.
 var rolePrivilegesQuery = `
 	SELECT
 		r.rolname AS username,
@@ -107,7 +108,7 @@ var rolePrivilegesQuery = `
 	FROM 
 		pg_roles r
 	WHERE 
-		r.rolname NOT IN ('postgres', 'pg_signal_backend', 'pg_read_all_settings', 
+		r.rolname NOT IN ('pg_signal_backend', 'pg_read_all_settings', 
 						  'pg_read_all_stats', 'pg_stat_scan_tables', 'pg_monitor', 
 						  'pg_database_owner')
 		AND r.rolcanlogin = true
