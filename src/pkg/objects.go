@@ -24,6 +24,9 @@ type DBConfig struct {
 	ProxysqlAdminUser     string `mapstructure:"PROXYSQL_ADMIN_USER"`
 	ProxysqlAdminPassword string `mapstructure:"PROXYSQL_ADMIN_PASSWORD"`
 	ProxysqlAdminAddr     string `mapstructure:"PROXYSQL_ADMIN_ADDR"`
+
+	// How often to ask the control plane for jobs, in seconds (jobloop.go): 10 by default, 0 = with the sync.
+	JobPollSeconds string `mapstructure:"JOB_POLL_SECONDS"`
 }
 
 // InstanceCreatedResponse contains the response from the register agent API

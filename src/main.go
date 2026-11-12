@@ -190,6 +190,17 @@ func startAgent(exit chan struct{}) {
 	// Session recording: ProxySQL's spool of recorded statements, uploaded as each 5-second file
 	// closes (pkg/recordings.go, authnull-service docs/DB-SESSION-RECORDING.md).
 	go pkg.RunRecordingsLoop(sessionTargets, pkg.RecordingDir(), 5*time.Second, stopSessions)
+	// The control plane's jobs (passwords, console roles, just-in-time accounts) on their own short
+	// poll, JOB_POLL_SECONDS (10; 0 = with the sync, as before). pkg/jobloop.go.
+	jobPoll := pkg.JobPollEvery(config.JobPollSeconds)
+	if jobPoll > 0 {
+		var jobTargets []pkg.JobTarget
+		for _, h := range dbHandles {
+			jobTargets = append(jobTargets, pkg.JobTarget{Conn: h.Conn, Cfg: h.Cfg})
+		}
+		go pkg.RunJobsLoop(jobTargets, jobPoll, stopSessions)
+		log.Printf("Jobs: polled every %s", jobPoll)
+	}
 
 	// Ticker to run the synchronization every minute
 	ticker := time.NewTicker(time.Duration(timeInterval) * time.Minute)
@@ -206,13 +217,19 @@ func startAgent(exit chan struct{}) {
 				if err := pkg.FetchDatabaseDetails(h.Conn, h.Cfg); err != nil {
 					log.Printf("Sync failed for %s: %v", h.Cfg.Host, err)
 				}
-				if err := pkg.RotateDuePasswordsForHost(h.Conn, h.Cfg, time.Now()); err != nil {
-					log.Printf("Password rotation failed for %s: %v", h.Cfg.Host, err)
-				}
-				// Passwords the backend holds in its vault, for roles it manages there.
-				if err := pkg.ProcessVaultJobsForHost(h.Conn, h.Cfg, time.Now()); err != nil {
-					log.Printf("Vault password jobs failed for %s: %v", h.Cfg.Host, err)
-				}
+				// Never while a job sets passwords (pkg/jobloop.go).
+				pkg.WithJobLock(func() {
+					if err := pkg.RotateDuePasswordsForHost(h.Conn, h.Cfg, time.Now()); err != nil {
+						log.Printf("Password rotation failed for %s: %v", h.Cfg.Host, err)
+					}
+					// Passwords the backend holds in its vault, for roles it manages there -- here
+					// only when the job poll is off.
+					if jobPoll == 0 {
+						if err := pkg.ProcessVaultJobsForHost(h.Conn, h.Cfg, time.Now()); err != nil {
+							log.Printf("Vault password jobs failed for %s: %v", h.Cfg.Host, err)
+						}
+					}
+				})
 			}
 			log.Default().Println("DB Synchronization Completed.")
 		case <-exit:
