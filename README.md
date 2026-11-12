@@ -40,6 +40,11 @@ one line per database per sync:
 
     Synced appdb (postgres, 192.168.122.175:5432): 42 users, 0 failed
 
+`JOB_POLL_SECONDS` (default `10`) is how often the agent asks the control plane for jobs: password
+rotations, console roles and just-in-time accounts. A just-in-time account is created within seconds
+of its approval and dropped within seconds of its grant ending. `0` runs jobs only with the sync,
+every `TIME_INTERVAL` minutes, as before.
+
 `LOG_LEVEL=debug`, in `db.env` or the service's environment, adds the per-user, per-table and
 per-payload detail and every successful connection (payloads with their secrets redacted). That
 is tens of thousands of lines an hour on a busy install: turn it on to chase a problem, then off.
