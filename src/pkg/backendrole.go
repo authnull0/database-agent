@@ -161,13 +161,6 @@ func ProvisionBackendRole(target *sql.DB, proxy proxyUsers, host, database, sour
 		return "", nil
 	}
 	verbs := backendRoleVerbs(privileges)
-	// Writing rows into a table with a serial column draws from its sequence.
-	write := false
-	for _, v := range verbs {
-		if v == "INSERT" || v == "UPDATE" {
-			write = true
-		}
-	}
 
 	// One password, held by ProxySQL and set on the role: keep ProxySQL's until it is due for
 	// rotation, so a checkout doesn't reset the clock.
@@ -222,6 +215,37 @@ func ProvisionBackendRole(target *sql.DB, proxy proxyUsers, host, database, sour
 		fmt.Sprintf("GRANT %s TO %s", qg, q),
 		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", pq.QuoteIdentifier(database), q),
 	}
+	more, err := tableGrantStatements(target, q, verbs, tables)
+	if err != nil {
+		return "", err
+	}
+	stmts = append(stmts, more...)
+	for _, s := range stmts {
+		if _, err := target.Exec(s); err != nil {
+			return "", fmt.Errorf("%s: %w", s, err)
+		}
+	}
+
+	if proxy != nil {
+		u := proxyUser{Username: name, Password: password, DefaultHostgroup: hostgroupID, Comment: comment}
+		if err := proxy.Put(u); err != nil {
+			return "", fmt.Errorf("register %s in ProxySQL: %w", name, err)
+		}
+	}
+	return name, nil
+}
+
+// tableGrantStatements grant verbs on tables to the quoted role q, in target's database: no tables
+// is the whole public schema. Writing rows into a table with a serial column draws from its
+// sequence, so a role that writes gets those too.
+func tableGrantStatements(target *sql.DB, q string, verbs, tables []string) ([]string, error) {
+	write := false
+	for _, v := range verbs {
+		if v == "INSERT" || v == "UPDATE" {
+			write = true
+		}
+	}
+	var stmts []string
 	privList := strings.Join(verbs, ", ")
 
 	if len(canonicalTables(tables)) == 0 {
@@ -248,7 +272,7 @@ func ProvisionBackendRole(target *sql.DB, proxy proxyUsers, host, database, sour
 			if write {
 				seqs, err := ownedSequences(target, schema, table)
 				if err != nil {
-					return "", err
+					return nil, err
 				}
 				for _, s := range seqs {
 					stmts = append(stmts, fmt.Sprintf("GRANT USAGE ON SEQUENCE %s TO %s", s, q))
@@ -256,19 +280,7 @@ func ProvisionBackendRole(target *sql.DB, proxy proxyUsers, host, database, sour
 			}
 		}
 	}
-	for _, s := range stmts {
-		if _, err := target.Exec(s); err != nil {
-			return "", fmt.Errorf("%s: %w", s, err)
-		}
-	}
-
-	if proxy != nil {
-		u := proxyUser{Username: name, Password: password, DefaultHostgroup: hostgroupID, Comment: comment}
-		if err := proxy.Put(u); err != nil {
-			return "", fmt.Errorf("register %s in ProxySQL: %w", name, err)
-		}
-	}
-	return name, nil
+	return stmts, nil
 }
 
 // ownedSequences: the sequences behind a table's serial and identity columns, quoted.
