@@ -14,6 +14,18 @@ type fakeSessionAdmin struct {
 	rows   []processRow
 	killed []int64
 	known  map[int64]bool
+	ended  map[int64]int64 // session -> new end, as set
+}
+
+func (f *fakeSessionAdmin) SetEnds(id, endsAt int64) (bool, string, error) {
+	if f.ended == nil {
+		f.ended = map[int64]int64{}
+	}
+	if !f.known[id] {
+		return false, "no PgSQL session on an access grant", nil
+	}
+	f.ended[id] = endsAt
+	return true, "session ends", nil
 }
 
 func (f *fakeSessionAdmin) List() ([]processRow, error) { return f.rows, nil }
@@ -29,6 +41,7 @@ type fakeSessionBackend struct {
 	mu      sync.Mutex
 	reports []map[string]any
 	kill    []int64
+	ends    []map[string]any
 	raw     []string
 }
 
@@ -54,8 +67,8 @@ func newFakeSessionBackend(t *testing.T) (*fakeSessionBackend, *httptest.Server)
 		json.Unmarshal(raw, &body)
 		fb.raw = append(fb.raw, buf.String())
 		fb.reports = append(fb.reports, body)
-		json.NewEncoder(w).Encode(map[string]any{"kill": fb.kill})
-		fb.kill = nil
+		json.NewEncoder(w).Encode(map[string]any{"kill": fb.kill, "ends": fb.ends})
+		fb.kill, fb.ends = nil, nil
 	}))
 	t.Cleanup(srv.Close)
 	return fb, srv
@@ -138,4 +151,51 @@ func reportedIDs(t *testing.T, report map[string]any) []int64 {
 		out = append(out, int64(s.(map[string]any)["id"].(float64)))
 	}
 	return out
+}
+
+// An extended grant: the backend hands back new ends for the grant's open sessions with the report's
+// answer; the agent sets them in ProxySQL (PGSQL|MYSQL SET SESSION ENDS) and says how it went in the
+// next report, once.
+func TestSessionsNewEnds(t *testing.T) {
+	t.Cleanup(resetInstallCredentialForTest)
+	fb, srv := newFakeSessionBackend(t)
+	SetInstallCredential(srv.URL, testClientID, testClientSecret)
+	cfg := DBConfig{API: srv.URL, Host: "192.168.122.175", Port: "5432", DBType: "postgres"}
+	admin := &fakeSessionAdmin{known: map[int64]bool{7: true}, rows: []processRow{{ID: 7, Hostgroup: 6}}}
+	tracker := &sessionsTracker{}
+
+	fb.ends = []map[string]any{{"id": 7, "endsAt": 1794303775}, {"id": 99, "endsAt": 1794303775}}
+	if err := tracker.round(admin, cfg, 6, false); err != nil {
+		t.Fatal(err)
+	}
+	if admin.ended[7] != 1794303775 || len(admin.ended) != 1 {
+		t.Fatalf("ends set: %v", admin.ended)
+	}
+	tracker.round(admin, cfg, 6, false)
+	set, _ := fb.reports[1]["endsSet"].([]any)
+	if len(set) != 2 {
+		t.Fatalf("outcomes: %v", fb.reports[1]["endsSet"])
+	}
+	results := map[float64]map[string]any{}
+	for _, k := range set {
+		m := k.(map[string]any)
+		results[m["id"].(float64)] = m
+	}
+	if results[7]["ok"] != true || results[99]["ok"] != false || !strings.Contains(results[99]["error"].(string), "no PgSQL session") {
+		t.Errorf("outcomes: %v", results)
+	}
+	tracker.round(admin, cfg, 6, false)
+	if k, _ := fb.reports[2]["endsSet"].([]any); len(k) != 0 {
+		t.Errorf("outcomes sent twice: %v", k)
+	}
+}
+
+// The admin command names the engine: ProxySQL numbers its MySQL and PostgreSQL sessions separately.
+func TestSetEndsStatement(t *testing.T) {
+	if got := setEndsStatement(EnginePostgres, 42, 1794303775); got != "PGSQL SET SESSION ENDS 42 1794303775" {
+		t.Errorf("postgres: %q", got)
+	}
+	if got := setEndsStatement(EngineMySQL, 7, 1794303775); got != "MYSQL SET SESSION ENDS 7 1794303775" {
+		t.Errorf("mysql: %q", got)
+	}
 }

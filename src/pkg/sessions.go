@@ -32,6 +32,28 @@ type processRow struct {
 type sessionAdmin interface {
 	List() ([]processRow, error)
 	Kill(id int64) (ok bool, detail string, err error)
+	SetEnds(id, endsAt int64) (ok bool, detail string, err error)
+}
+
+// setEndsStatement moves an open session's access-grant end (ProxySQL include/authnull_session_ends.h),
+// naming the engine: ProxySQL numbers its MySQL and PostgreSQL sessions separately.
+func setEndsStatement(engine string, id, endsAt int64) string {
+	prefix := "PGSQL"
+	if engine == EngineMySQL {
+		prefix = "MYSQL"
+	}
+	return prefix + " SET SESSION ENDS " + strconv.FormatInt(id, 10) + " " + strconv.FormatInt(endsAt, 10)
+}
+
+// SetEnds sends SET SESSION ENDS, which answers with a row (updated, detail). A ProxySQL without the
+// command answers with an error: the new end is reported failed with it.
+func (a adminSessions) SetEnds(id, endsAt int64) (bool, string, error) {
+	var updated int
+	var detail string
+	if err := a.db.QueryRow(setEndsStatement(a.engine, id, endsAt)).Scan(&updated, &detail); err != nil {
+		return false, "", err
+	}
+	return updated == 1, detail, nil
 }
 
 // adminSessions is ProxySQL's sessions for one engine: MySQL's and PostgreSQL's are separate lists.
@@ -99,10 +121,18 @@ type killOutcome struct {
 	Error string `json:"error,omitempty"`
 }
 
-// sessionsTracker is one server's state between rounds: the outcomes of the last kills, not yet
-// reported.
+// sessionsTracker is one server's state between rounds: the outcomes of the last kills and new
+// session ends, not yet reported.
 type sessionsTracker struct {
-	pending []killOutcome
+	pending     []killOutcome
+	pendingEnds []killOutcome
+}
+
+// sessionEnd is a new end for an open session, from an extended grant (authnull-service
+// docs/DB-ACCESS-REQUESTS.md, "Extending a grant").
+type sessionEnd struct {
+	ID     int64 `json:"id"`
+	EndsAt int64 `json:"endsAt"`
 }
 
 // round reports the server's sessions -- those in its hostgroup, and, when the agent serves this
@@ -132,13 +162,30 @@ func (t *sessionsTracker) round(admin sessionAdmin, cfg DBConfig, hostgroup int,
 		host += ":" + cfg.Port
 	}
 	var answer struct {
-		Kill []int64 `json:"kill"`
+		Kill []int64      `json:"kill"`
+		Ends []sessionEnd `json:"ends"`
 	}
-	body := map[string]any{"host": host, "sessions": sessions, "killed": t.pending}
+	body := map[string]any{"host": host, "sessions": sessions, "killed": t.pending, "endsSet": t.pendingEnds}
 	if err := postJSON(strings.TrimRight(cfg.API, "/"), sessionsReportPath, body, &answer); err != nil {
 		return err // the outcomes stay pending for the next round
 	}
-	t.pending = nil
+	t.pending, t.pendingEnds = nil, nil
+	for _, e := range answer.Ends {
+		ok, detail, err := admin.SetEnds(e.ID, e.EndsAt)
+		out := killOutcome{ID: e.ID, OK: ok && err == nil}
+		switch {
+		case err != nil:
+			out.Error = err.Error()
+		case !ok:
+			out.Error = detail
+		}
+		if out.OK {
+			log.Printf("ProxySQL session %d on %s now ends at %s (grant extended)", e.ID, cfg.Host, time.Unix(e.EndsAt, 0).UTC().Format(time.RFC3339))
+		} else {
+			log.Printf("Could not move the end of ProxySQL session %d on %s: %s", e.ID, cfg.Host, out.Error)
+		}
+		t.pendingEnds = append(t.pendingEnds, out)
+	}
 	for _, id := range answer.Kill {
 		ok, detail, err := admin.Kill(id)
 		out := killOutcome{ID: id, OK: ok && err == nil}
