@@ -182,6 +182,8 @@ func runVaultJob(api string, pg *sql.DB, proxy proxyUsers, hg hostgroups, config
 		return runRotateJob(api, pg, proxy, hg, config, j, now)
 	case "apply_role":
 		return runApplyRoleJob(api, pg, proxy, hg, config, j, now)
+	case "elevate", "unelevate":
+		return runElevationJob(pg, config, j)
 	case "apply_policy_role":
 		return runApplyPolicyRoleJob(pg, proxy, hg, config, j, now)
 	case "drop_policy_role":
