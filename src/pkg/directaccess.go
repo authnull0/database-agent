@@ -420,6 +420,11 @@ func CheckDirectAccess(pg *sql.DB, proxy proxyUsers, config DBConfig, databases 
 		if !ok || h != config.Host {
 			continue
 		}
+		// A ProxySQL user whose role was dropped from the server is not managed here any more: putting
+		// it in the group failed, and was logged, every minute (ca_priv_elev on the lab).
+		if exists, err := pgRoleExists(pg, u.Username); err == nil && !exists {
+			continue
+		}
 		if err := ensureManagedGroup(pg, u.Username); err != nil {
 			log.Printf("Direct access: %v", err)
 		}

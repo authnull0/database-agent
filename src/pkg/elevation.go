@@ -205,14 +205,70 @@ func elevate(server *sql.DB, open dbOpener, config DBConfig, account string, p e
 	if member {
 		return "", fmt.Errorf("account %q is already a member of %q; an elevation would grant nothing and its end would take standing access away", account, role)
 	}
-	if _, err := server.Exec(fmt.Sprintf("GRANT %s TO %s", pq.QuoteIdentifier(role), pq.QuoteIdentifier(account))); err != nil {
+	// The accounts the agent creates are NOINHERIT (consolerole.go, backendrole.go), so a plain grant
+	// gave them nothing until a SET ROLE nobody was told about -- and after that SET ROLE the session
+	// had only the elevation's privileges, losing the account's own SELECT, so an UPDATE ... WHERE
+	// was refused anyway. PostgreSQL 16 made inheritance a property of each membership: this one
+	// grant is inherited, the account stays NOINHERIT for everything else.
+	grant := fmt.Sprintf("GRANT %s TO %s", pq.QuoteIdentifier(role), pq.QuoteIdentifier(account))
+	perGrant := perGrantInheritance(server)
+	if perGrant {
+		grant += " WITH INHERIT TRUE"
+	}
+	if _, err := server.Exec(grant); err != nil {
 		return "", fmt.Errorf("granting %s: %w", role, err)
 	}
+	if perGrant {
+		return "", nil
+	}
 	var inherit bool
-	if err := server.QueryRow(`SELECT rolinherit FROM pg_roles WHERE rolname = $1`, account).Scan(&inherit); err == nil && !inherit {
-		return fmt.Sprintf("account %q does not inherit; its sessions need SET ROLE %s", account, role), nil
+	if err := server.QueryRow(`SELECT rolinherit FROM pg_roles WHERE rolname = $1`, account).Scan(&inherit); err != nil || inherit {
+		return "", nil
+	}
+	// Before PostgreSQL 16 inheritance belongs to the account, not the grant: turned on for the
+	// elevation and marked, so its end turns it off again (restoreNoInherit). Meanwhile the account's
+	// other memberships inherit too; the agent's accounts have only ManagedGroup, which holds nothing.
+	qa := pq.QuoteIdentifier(account)
+	setRole := fmt.Sprintf("account %q does not inherit; its sessions need SET ROLE %s", account, role)
+	if _, err := server.Exec("ALTER ROLE " + qa + " INHERIT"); err != nil {
+		return setRole, nil
+	}
+	if _, err := server.Exec("ALTER ROLE " + qa + " SET " + inheritMarker + " = 'on'"); err != nil {
+		// Unmarked, the end could not tell it to turn inheritance off: leave the account as it was.
+		server.Exec("ALTER ROLE " + qa + " NOINHERIT")
+		return setRole, nil
 	}
 	return "", nil
+}
+
+// inheritMarker marks an account the agent made INHERIT for an elevation (PostgreSQL 15 and older).
+const inheritMarker = "authnull.elevation_inherit"
+
+// restoreNoInherit turns inheritance off again on an account elevate turned it on for, once no
+// other elevation of it is running.
+func restoreNoInherit(server *sql.DB, account string) {
+	var marked, elevated bool
+	server.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole
+		WHERE r.rolname = $1 AND s.setdatabase = 0 AND $2 = ANY (s.setconfig))`, account, inheritMarker+"=on").Scan(&marked)
+	if !marked {
+		return
+	}
+	server.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles a ON a.oid = m.member
+		JOIN pg_roles r ON r.oid = m.roleid JOIN pg_roles g ON g.oid = m.grantor
+		WHERE a.rolname = $1 AND g.rolname = current_user AND r.rolname <> $2)`, account, ManagedGroup).Scan(&elevated)
+	if elevated {
+		return
+	}
+	qa := pq.QuoteIdentifier(account)
+	server.Exec("ALTER ROLE " + qa + " NOINHERIT")
+	server.Exec("ALTER ROLE " + qa + " RESET " + inheritMarker)
+}
+
+// perGrantInheritance says whether the server takes GRANT ... WITH INHERIT (PostgreSQL 16 and
+// later). Older servers inherit by the member role's own INHERIT attribute only.
+func perGrantInheritance(db *sql.DB) bool {
+	var v int
+	return db.QueryRow(`SELECT current_setting('server_version_num')::int`).Scan(&v) == nil && v >= 160000
 }
 
 // unelevate takes back the membership the agent granted and ends the account's sessions. A
@@ -241,6 +297,7 @@ func unelevate(server *sql.DB, account string, p elevatePayload) (warn string, e
 	case member:
 		warn = fmt.Sprintf("account %q is a member of %q through a grant AuthNull did not make; left in place", account, role)
 	}
+	restoreNoInherit(server, account)
 	if err := endSessions(server, account); err != nil {
 		return warn, err
 	}

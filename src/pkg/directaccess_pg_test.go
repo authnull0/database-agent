@@ -1,6 +1,9 @@
 package pkg
 
 import (
+	"bytes"
+	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -53,3 +56,32 @@ func TestPostgresManagedGroup(t *testing.T) {
 }
 
 func nowForTest() time.Time { return time.Now() }
+
+// A ProxySQL user whose role was dropped from the server is skipped by the check, not tried (and
+// logged) every minute; a role still there is put in the group.
+func TestDirectAccessSkipsRolesNoLongerOnTheServer(t *testing.T) {
+	admin, base := agentTestDB(t)
+	dbName := strings.TrimPrefix(base.Path, "/")
+	const live, gone, host = "da_live_it", "da_gone_it", "192.168.122.175"
+	admin.Exec("DROP ROLE IF EXISTS " + gone)
+	admin.Exec("DROP ROLE IF EXISTS " + live)
+	if _, err := admin.Exec("CREATE ROLE " + live + " LOGIN"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { admin.Exec("DROP ROLE IF EXISTS " + live) })
+	fp := newFakeProxy()
+	for _, r := range []string{live, gone} {
+		fp.users[r] = proxyUser{Username: r, Comment: rotationComment(host, time.Now())}
+	}
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	CheckDirectAccess(admin, fp, DBConfig{Host: host}, []string{dbName}, time.Now())
+	if strings.Contains(logged.String(), gone) {
+		t.Errorf("a role no longer on the server was tried: %s", logged.String())
+	}
+	if g, err := roleGroups(admin, live); err != nil || !g[ManagedGroup] {
+		t.Errorf("the live role is not in %s: %v %v", ManagedGroup, g, err)
+	}
+}
