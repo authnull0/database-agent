@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -21,6 +22,9 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 	logDebugf("Fetching table names FROM database: %s", dbName)
 
 	tables, err := databaseTables(mainDb, config, dbName)
+	if errors.Is(err, errNoConnect) {
+		return nil // logged once by openPGDatabase
+	}
 	if err != nil {
 		log.Printf("Error reading tables of %s: %v", dbName, err)
 		return err
@@ -81,48 +85,51 @@ func FetchTables(mainDb *sql.DB, dbName string, config DBConfig, instanceId stri
 	return nil
 }
 
-// pgTables lists the tables in schema public with their columns.
-func pgTables(specificDb *sql.DB) (map[string][]string, error) {
-	tables := make(map[string][]string)
-	// PostgreSQL query to list tables in the schema
-	tableQuery := "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public'"
-	logDebugf("Executing query: %s", tableQuery)
+// pgTablesQuery is every table (partitioned ones included) of every schema but the system ones,
+// with its columns in order, in one pass: a database with hundreds of tables used to cost a query
+// per table.
+const pgTablesQuery = `
+	SELECT t.schemaname, t.tablename, c.column_name
+	FROM pg_catalog.pg_tables t
+	LEFT JOIN information_schema.columns c
+	       ON c.table_schema = t.schemaname AND c.table_name = t.tablename
+	WHERE t.schemaname NOT IN ('pg_catalog', 'information_schema')
+	  AND t.schemaname NOT LIKE 'pg\_toast%'
+	  AND t.schemaname NOT LIKE 'pg\_temp\_%'
+	ORDER BY t.schemaname, t.tablename, c.ordinal_position`
 
-	rows, err := specificDb.Query(tableQuery)
+// pgTableName is how a table is reported, as policies name tables (backendrole.go
+// canonicalTables): a table in schema public by its bare name, as before -- the names already
+// stored and the policies and field masking that name them keep working -- any other as
+// "schema.table".
+func pgTableName(schema, table string) string {
+	if schema == "public" {
+		return table
+	}
+	return schema + "." + table
+}
+
+// pgTables lists the tables of every non-system schema with their columns (pgTablesQuery).
+func pgTables(specificDb *sql.DB) (map[string][]string, error) {
+	rows, err := specificDb.Query(pgTablesQuery)
 	if err != nil {
 		log.Printf("Error querying tables: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
-
+	tables := make(map[string][]string)
 	for rows.Next() {
-		var tableName string
-		if err := rows.Scan(&tableName); err != nil {
-			log.Printf("Error scanning table name: %v", err)
+		var schema, table string
+		var column sql.NullString
+		if err := rows.Scan(&schema, &table, &column); err != nil {
 			return nil, err
 		}
-
-		// PostgreSQL query to list columns in a table. The name is a bind parameter: a table name
-		// is data, and one with a quote in it used to break (or rewrite) the query.
-		columnRows, err := specificDb.Query("SELECT column_name FROM information_schema.columns "+
-			"WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position", tableName)
-		if err != nil {
-			log.Printf("Error querying columns for table %s: %v", tableName, err)
-			return nil, err
+		name := pgTableName(schema, table)
+		if column.Valid {
+			tables[name] = append(tables[name], column.String)
+		} else if _, ok := tables[name]; !ok {
+			tables[name] = nil // a table with no columns (or none the agent may see)
 		}
-
-		var columns []string
-		for columnRows.Next() {
-			var columnName string
-			if err := columnRows.Scan(&columnName); err != nil {
-				log.Printf("Error scanning column name: %v", err)
-				columnRows.Close()
-				return nil, err
-			}
-			columns = append(columns, columnName)
-		}
-		columnRows.Close()
-		tables[tableName] = columns
 	}
 	return tables, rows.Err()
 }

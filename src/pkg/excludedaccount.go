@@ -15,10 +15,36 @@ func builtinAdmin(config DBConfig, user string) bool {
 	return user == "postgres"
 }
 
+// healthCheckNames are the health check's database and login names: HEALTH_CHECK_NAMES,
+// comma-separated, or "monitor" (the ProxySQL monitor's login and database) when unset.
+func healthCheckNames(config DBConfig) []string {
+	var out []string
+	for _, n := range strings.Split(config.HealthCheckNames, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			out = append(out, n)
+		}
+	}
+	if len(out) == 0 {
+		return []string{"monitor"}
+	}
+	return out
+}
+
+// healthCheckName is whether name (a database or a login) is the health check's.
+func healthCheckName(config DBConfig, name string) bool {
+	for _, n := range healthCheckNames(config) {
+		if strings.EqualFold(n, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // excludedAccount is whether user stays out of AuthNull on this target: the engine's built-in
-// admin, the account the agent itself logs in as (config.User), and MySQL's own system accounts.
+// admin, the account the agent itself logs in as (config.User), MySQL's own system accounts, and
+// the health check's login (monitor; any host part on MySQL).
 func excludedAccount(config DBConfig, user string) bool {
-	if builtinAdmin(config, user) {
+	if builtinAdmin(config, user) || healthCheckName(config, user) {
 		return true
 	}
 	if own := strings.TrimSpace(config.User); own != "" && user == own {

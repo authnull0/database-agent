@@ -14,6 +14,20 @@ import (
 	"github.com/authnull0/database-agent/utils"
 )
 
+// publicConnect is whether every role may connect to dbName: CONNECT granted to PUBLIC, as
+// PostgreSQL grants it on a new database by default. nil for MySQL (no PUBLIC) or when unread.
+func publicConnect(db *sql.DB, config DBConfig, dbName string) *bool {
+	if isMySQL(config) {
+		return nil
+	}
+	var v bool
+	if err := db.QueryRow("SELECT has_database_privilege('public', $1, 'CONNECT')", dbName).Scan(&v); err != nil {
+		logDebugf("Reading PUBLIC's CONNECT on %s: %v", dbName, err)
+		return nil
+	}
+	return &v
+}
+
 // FetchDatabaseStatus reports a database, and whether its server is up, and returns the hostgroup
 // the backend gives it
 func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId string) (int, string, error) {
@@ -77,6 +91,10 @@ func FetchDatabaseStatus(db *sql.DB, dbName string, config DBConfig, instanceId 
 		"status":       status,
 		"uuid":         config.Key,
 		"instanceId":   instanceId,
+	}
+	// Whether every role may connect (the control plane's risk warnings); left out when unknown.
+	if pc := publicConnect(db, config, dbName); pc != nil {
+		payload["publicConnect"] = *pc
 	}
 
 	payloadBytes, err := json.Marshal(payload)

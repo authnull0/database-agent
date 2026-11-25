@@ -27,6 +27,10 @@ type DBConfig struct {
 
 	// How often to ask the control plane for jobs, in seconds (jobloop.go): 10 by default, 0 = with the sync.
 	JobPollSeconds string `mapstructure:"JOB_POLL_SECONDS"`
+
+	// The health check's database and login names, comma-separated (excludedaccount.go): "monitor"
+	// when unset. ProxySQL's monitor is not a database or person AuthNull manages.
+	HealthCheckNames string `mapstructure:"HEALTH_CHECK_NAMES"`
 }
 
 // InstanceCreatedResponse contains the response from the register agent API
