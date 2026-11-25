@@ -2,9 +2,13 @@ package pkg
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"sync"
+
+	"github.com/lib/pq"
 )
 
 // What a sync reads from a MySQL target: the same payloads as for PostgreSQL, from MySQL's own
@@ -44,6 +48,11 @@ func listDatabases(db *sql.DB, config DBConfig) ([]string, error) {
 		// Skip system databases
 		if isSystemDatabase(dbName, systemKey) {
 			logDebugf("Skipping system database: %s", dbName)
+			continue
+		}
+		// The health check's database (ProxySQL's monitor) is not one AuthNull manages.
+		if healthCheckName(config, dbName) {
+			logDebugf("Skipping the health check's database: %s", dbName)
 			continue
 		}
 		out = append(out, dbName)
@@ -104,7 +113,7 @@ func databaseUsers(db *sql.DB, config DBConfig, dbName string) ([]databaseUser, 
 		tables, err = pgTablePrivileges(conn)
 		closeConn()
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, errNoConnect) {
 		log.Printf("Reading table privileges on %s: %v", dbName, err)
 	}
 	for i := range out {
@@ -145,6 +154,12 @@ func pgDatabaseConn(db *sql.DB, config DBConfig, dbName string) (conn *sql.DB, d
 	return specificDb, func() { specificDb.Close() }, nil
 }
 
+// errNoConnect: the agent's login may not connect to the database. Logged once per database, not
+// every sync; its callers leave it unlogged.
+var errNoConnect = errors.New("the agent's login has no CONNECT on this database")
+
+var noConnectLogged sync.Map
+
 // openPGDatabase opens and pings a connection to dbName with the agent's credentials.
 func openPGDatabase(config DBConfig, dbName string) (*sql.DB, error) {
 	// Create a new connection to the specific database
@@ -159,15 +174,24 @@ func openPGDatabase(config DBConfig, dbName string) (*sql.DB, error) {
 
 	// Test the connection
 	if err := specificDb.Ping(); err != nil {
-		log.Printf("Cannot ping database %s: %v", dbName, err)
 		specificDb.Close()
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "42501" { // insufficient_privilege
+			if _, seen := noConnectLogged.LoadOrStore(config.Host+"/"+dbName, true); !seen {
+				log.Printf("Database %s on %s: %v; its tables and table privileges are not synced "+
+					"(grant the agent CONNECT to sync them). Logged once.", dbName, config.Host, err)
+			}
+			return nil, fmt.Errorf("%s: %w", dbName, errNoConnect)
+		}
+		log.Printf("Cannot ping database %s: %v", dbName, err)
 		return nil, err
 	}
 	return specificDb, nil
 }
 
-// databaseTables lists dbName's tables with their columns: PostgreSQL's schema public, through a
-// connection to that database; MySQL's tables (views aside), through the server connection.
+// databaseTables lists dbName's tables with their columns: PostgreSQL's, every schema but the
+// system ones, through a connection to that database (pgTables); MySQL's tables (views aside),
+// through the server connection.
 func databaseTables(db *sql.DB, config DBConfig, dbName string) (map[string][]string, error) {
 	if isMySQL(config) {
 		return mysqlTables(db, dbName)
